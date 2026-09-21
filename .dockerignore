@@ -1,0 +1,32 @@
+# Secrets -- never sent to the Docker build context. Same reasoning as
+# TCG Price Tracker's own .dockerignore: the Dockerfile only COPYs named
+# files, but the daemon/build cache/any remote builder still sees
+# everything else in this directory regardless.
+.env
+
+# Data -- generated/mounted at runtime, not source. The real deployment
+# mounts ./data as the persistent volume (see docker-compose.yml) instead.
+data/
+*.db
+*.sqlite3
+
+# The real MITRE ATT&CK STIX bundle -- downloaded fresh during the Docker
+# build itself (see the Dockerfile), never needs to ride along in the
+# build context.
+enterprise-attack.json
+
+# MITRE CTID's real KEV-to-ATT&CK mapping snapshot -- same reasoning,
+# downloaded fresh during the Docker build.
+ctid-kev-attack-mapping.json
+
+# Impeccable's own tool-internal metadata -- not part of the shipped app.
+.impeccable/
+
+# Dev-only reference file, not loaded by the live app.
+_mockup_pipboy.html
+
+# Old/local-only, never needed to build the image
+.venv/
+__pycache__/
+*.pyc
+*.log

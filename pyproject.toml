@@ -1,0 +1,15 @@
+[project]
+name = "nekocti"
+version = "0.1.0"
+description = "Self-hosted OSINT/threat-intelligence tracker"
+readme = "README.md"
+authors = [
+    { name = "GodOfNekos", email = "15893709+GodOfNekos@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.14",
+    "httpx>=0.28.1",
+    "mitreattack-python>=6.2.0",
+    "trafilatura>=2.2.0",
+]

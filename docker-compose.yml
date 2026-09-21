@@ -1,0 +1,55 @@
+services:
+  nekocti:
+    build: .
+    container_name: nekocti
+    restart: unless-stopped
+    environment:
+      # Generate a reusable, tagged auth key at
+      # https://login.tailscale.com/admin/settings/keys and put it in a
+      # local .env file (see .env.example) -- never commit the real key.
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      # Deliberately its own hostname, distinct from tcg-price-tracker's --
+      # each container gets its own separate tailnet identity, same
+      # reasoning as why they're separate containers in the first place.
+      - TS_HOSTNAME=${TS_HOSTNAME:-nekocti}
+      # host.docker.internal reaches the Ollama instance already running
+      # on this machine's own host -- localhost/127.0.0.1 from inside the
+      # container would mean the container itself, which has no Ollama of
+      # its own. No auth needed since Ollama has none by design.
+      - OLLAMA_URL=http://host.docker.internal:11434
+      # Where the digest feature writes -- see the vault-daily-notes mount
+      # below. Neko's real vault path is outside this project entirely, so
+      # this can't default the way it does on bare-metal (Path.home()
+      # inside the container resolves to appuser's home, not Neko's).
+      - VAULT_DAILY_NOTES_PATH=/app/vault-daily-notes
+    volumes:
+      # The SQLite archive and the editable JSON configs (watchlist, tags,
+      # campaigns) -- everything that needs to survive a rebuild, plus
+      # Tailscale's own node state so it doesn't rejoin as a brand new
+      # device every restart.
+      - ./data:/app/data
+      # Scoped to only the Daily Notes folder, not the whole vault --
+      # least privilege: the digest only ever needs to read/write today's
+      # note, so that's the only part of Neko's vault this container can
+      # ever reach, even if it were somehow compromised.
+      - "${DIGEST_NOTES_DIR:-./digest-notes}:/app/vault-daily-notes"
+    extra_hosts:
+      # Docker Desktop on Windows/Mac defines this automatically, but
+      # declaring it explicitly here means the same compose file also
+      # works unchanged on a real Linux Docker host later, where it isn't
+      # automatic.
+      - "host.docker.internal:host-gateway"
+    # Not publishing a host port on purpose -- the only way in is through
+    # `tailscale serve` inside the container, over the tailnet. Same
+    # reasoning as TCG Price Tracker: publishing 8778 here would put it on
+    # the host's own network too, defeating the point of running Tailscale
+    # in its own container in the first place.
+    healthcheck:
+      # /api/watchlist always answers (no auth, tiny payload) -- unlike
+      # TCG Price Tracker, NekoCTI has no maintenance-lockout mode to route
+      # around, so any always-reachable real endpoint works here.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8778/api/watchlist"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

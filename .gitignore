@@ -1,0 +1,41 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets - real API keys, never committed
+.env
+
+# The local article/CVE/entity archive - real accumulated data, not source
+*.db
+*.sqlite3
+
+# Docker deployment: the real persistent volume (DB, editable configs,
+# Tailscale node state) and the symlink targets docker-entrypoint.sh
+# creates pointing into it - matching TCG Price Tracker's own .gitignore,
+# which lists its own equivalents explicitly rather than relying on the
+# generic *.db rule alone.
+data/
+watchlist.json
+tags.json
+campaigns.json
+
+# Local promotion-backup folders - safety nets kept outside git on purpose
+*backup*/
+
+# The real MITRE ATT&CK STIX bundle - 51MB downloaded data, not source.
+# Re-download from mitre-attack/attack-stix-data if this project is ever
+# cloned fresh; not something to carry in git history.
+enterprise-attack.json
+
+# MITRE CTID's real KEV-to-ATT&CK mapping snapshot - downloaded data, not
+# source. Re-download from center-for-threat-informed-defense/mappings-
+# explorer if this project is ever cloned fresh.
+ctid-kev-attack-mapping.json
+

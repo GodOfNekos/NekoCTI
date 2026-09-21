@@ -1,0 +1,757 @@
+/* NekoCTI - Pip-Boy Personal Monitor direction.
+   Verified against a real Fallout 4 Pip-Boy CSS recreation
+   (AviralMehrotra/Fallout4-Pip-Boy) before writing this, 16 September 2026 -
+   see PRODUCT.md's Brand Commitments for the full list of corrections that
+   resulted. Font and color pair are the real convention, not invented. */
+
+@font-face {
+  font-family: "PipBoy";
+  src: url('fonts/monofonto.otf') format('opentype');
+}
+
+:root {
+  --bg: #272b23;
+  --green: #14fe17;
+  --wash: rgba(20, 254, 23, 0.12);
+  --amber: #ffb347;
+  --danger: #ff5c4d;
+}
+
+* { box-sizing: border-box; }
+
+/* Interaction states the craft floor requires but nothing else in this
+   file provided - without these, tabs/rows/inputs fall back to the
+   browser's default blue focus ring and system scrollbar, breaking the
+   phosphor-green world at the exact moments a real device (keyboard nav,
+   text selection, an overflowing list) touches them. */
+::selection {
+  background: var(--green);
+  color: var(--bg);
+}
+:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: rgba(20,254,23,0.4); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--green); }
+* { scrollbar-color: rgba(20,254,23,0.4) var(--bg); scrollbar-width: thin; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: #000;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  font-family: 'PipBoy', 'Courier New', monospace;
+}
+
+/* Fills the real window instead of sitting in a fixed 1180x800 box - the
+   original mockup's device-frame sizing left a large unused black margin
+   on anything wider than that, found by Neko actually using it. Small
+   fixed margin keeps a hint of the "device bezel" without wasting space. */
+.device {
+  width: 100%;
+  height: 100%;
+  margin: 14px;
+  background: linear-gradient(160deg, #1a1d16 0%, #0d0f0b 100%);
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: 0 40px 80px rgba(0,0,0,0.6), inset 0 0 0 2px #34382c;
+}
+
+.screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--green);
+}
+
+/* Real scanline recipe from the reference recreation's styles.css. */
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg,
+    rgba(0,0,0,0.5), rgba(0,0,0,0.4) 1px, transparent 1px, transparent 2px);
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.topnav {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  row-gap: 8px;
+  column-gap: 34px;
+  padding: 22px 0 14px;
+  border-bottom: 2px solid var(--green);
+  margin: 0 24px;
+  position: relative;
+}
+.topnav .wordmark {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  font-size: 15px;
+  letter-spacing: 3px;
+  opacity: 0.6;
+}
+.tab {
+  font-size: 26px;
+  letter-spacing: 1px;
+  opacity: 0.5;
+  position: relative;
+  padding-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.tab .count { font-size: 13px; opacity: 0.8; margin-left: 6px; }
+.tab.active {
+  opacity: 1;
+  text-shadow: 0 0.5px 1px rgba(20,254,23,0.6);
+}
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: -10px; right: -10px; bottom: -2px;
+  height: 4px;
+  background: var(--bg);
+}
+
+.subnav {
+  display: flex;
+  gap: 30px;
+  padding: 10px 40px 0;
+  font-size: 15px;
+  letter-spacing: 1px;
+}
+/* :not([hidden]) - same reason as .list/.reader-overlay/.attack-view above. */
+#subnav-ranges:not([hidden]) {
+  display: flex;
+  gap: 30px;
+}
+.subtab { opacity: 0.5; cursor: pointer; user-select: none; }
+.subtab.active { opacity: 1; }
+
+.search-bar {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-bar input {
+  background: transparent;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 1px;
+  padding: 5px 10px;
+  width: 200px;
+  outline: none;
+}
+.search-bar input::placeholder { color: var(--green); opacity: 0.4; }
+.search-clear {
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.search-clear:hover { opacity: 1; color: var(--danger); }
+
+/* :not([hidden]) for the same reason as .reader-overlay above - a bare
+   `display: flex` would outrank the browser's `[hidden]` rule. */
+.list:not([hidden]) {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 40px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.section-label {
+  opacity: 0.55;
+  font-size: 13px;
+  letter-spacing: 3px;
+  margin: 14px 0 4px;
+}
+.section-label:first-child { margin-top: 0; }
+
+.row {
+  display: flex;
+  align-items: center;
+  padding: 9px 14px 9px 26px;
+  border-radius: 2px;
+  position: relative;
+  font-size: 17px;
+  cursor: pointer;
+}
+.row .title { flex: 1; margin-right: 16px; }
+.row .meta { display: flex; gap: 16px; font-size: 14px; opacity: 0.85; flex-shrink: 0; }
+.row:hover:not(.selected) { background: var(--wash); }
+.row.selected {
+  background: var(--green);
+  color: var(--bg);
+}
+.row.selected .meta { opacity: 1; }
+.row.selected::before {
+  content: "";
+  position: absolute;
+  left: 10px; top: 50%;
+  transform: translateY(-50%);
+  width: 9px; height: 9px;
+  background: var(--bg);
+}
+.row:not(.selected)::before {
+  content: "";
+  position: absolute;
+  left: 10px; top: 50%;
+  transform: translateY(-50%);
+  width: 9px; height: 9px;
+  background: var(--green);
+  opacity: 0.4;
+}
+.cve-crit { color: var(--danger); }
+.row.selected .cve-crit { color: #7a0d00; font-weight: bold; }
+
+.poc-repo-row .title a { color: var(--green); }
+.poc-repo-desc { opacity: 0.65; font-size: 13px; font-weight: normal; margin-top: 3px; }
+.poc-mention-only { opacity: 0.6; font-style: italic; }
+.poc-cve-desc { opacity: 0.75; font-size: 13px; font-weight: normal; margin-top: 4px; }
+.poc-cve-vendors { opacity: 0.55; font-size: 11px; font-weight: normal; letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px; }
+
+/* Real per-CVE MITRE ATT&CK tags, two honest confidence tiers (see
+   cve_attack.py): "expert" is MITRE's own cited analysis, shown as a
+   solid inverted pill matching the app's one real accent color; "llm" is
+   NekoCTI's own best-guess classification, shown as a dimmed outline of
+   the same shape so it never reads as equally authoritative. */
+.poc-attack-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+.attack-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 2px;
+  text-transform: uppercase;
+}
+.attack-tag-expert { background: var(--green); color: #04140a; }
+.attack-tag-llm { border: 1px solid var(--green); color: var(--green); opacity: 0.55; }
+.poc-attack-source { display: inline-block; margin-top: 4px; font-size: 11px; color: var(--green); }
+.poc-mention-flag { color: var(--amber); }
+
+.empty-state {
+  opacity: 0.6;
+  padding: 30px 0;
+  text-align: center;
+  font-size: 15px;
+}
+.empty-state.error-state {
+  opacity: 1;
+  color: var(--danger);
+}
+
+/* Watchlist/entities management panel */
+.panel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px 40px 20px;
+}
+.panel .category {
+  margin-bottom: 18px;
+}
+.panel .category-label {
+  opacity: 0.6;
+  font-size: 13px;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+}
+.panel .term-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.panel .term {
+  border: 1px solid var(--green);
+  padding: 4px 10px 4px 12px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel .term .remove {
+  cursor: pointer;
+  opacity: 0.6;
+}
+.panel .term .remove:hover { opacity: 1; color: var(--danger); }
+.panel .add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.panel input {
+  background: transparent;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 10px;
+  outline: none;
+}
+.panel input::placeholder { color: var(--green); opacity: 0.4; }
+.panel button {
+  background: transparent;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-family: inherit;
+  font-size: 14px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.panel button:hover { background: var(--green); color: var(--bg); }
+
+.entity-card {
+  border: 1px solid var(--green);
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+.entity-card:hover { background: rgba(20, 254, 23, 0.1); }
+.entity-card .entity-name { font-size: 17px; margin-bottom: 4px; }
+.entity-card .entity-aliases { opacity: 0.7; font-size: 13px; }
+.entity-card .remove:hover { color: var(--bg); background: var(--green); }
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  font-size: 15px;
+}
+.footer .chip {
+  background: var(--wash);
+  padding: 6px 14px;
+}
+.footer .gauge-wrap { flex: 1; text-align: center; }
+.footer .gauge {
+  display: inline-block;
+  width: 260px;
+  height: 14px;
+  border: 2px solid var(--green);
+  vertical-align: middle;
+  margin-left: 10px;
+}
+.footer .gauge-fill {
+  display: block;
+  height: 100%;
+  background: var(--green);
+}
+.chip-action {
+  cursor: pointer;
+  border: 1px solid var(--green);
+  background: transparent;
+  user-select: none;
+}
+.chip-action:hover { background: var(--wash); }
+.chip-action.running {
+  cursor: default;
+  opacity: 0.6;
+  animation: chip-pulse 1.2s ease-in-out infinite;
+}
+@keyframes chip-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Reading view - real full-article content shown in-dashboard, not a
+   forward to the original site. Neko's explicit request: this is meant
+   to be the central place for consumption, not a launchpad. */
+/* :not([hidden]) rather than a bare selector - a bare `display: flex` here
+   has equal specificity to the browser's own `[hidden] { display: none }`
+   rule and, being declared later, would win and render the overlay
+   visible-but-empty over the whole screen even while `hidden` is set. The
+   exact same bug class already hit once before in this environment
+   (Voice Visualizer, 30 August 2026) - checked for it here rather than
+   repeating it. */
+.reader-overlay:not([hidden]) {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+.reader-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 30px 14px;
+  border-bottom: 2px solid var(--green);
+}
+.reader-title { font-size: 22px; line-height: 1.3; max-width: 900px; }
+.reader-close {
+  border: 1px solid var(--green);
+  padding: 6px 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 15px;
+}
+.reader-close:hover { background: var(--green); color: var(--bg); }
+.reader-meta {
+  padding: 12px 30px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 14px;
+  opacity: 0.85;
+  border-bottom: 1px solid rgba(20,254,23,0.25);
+}
+/* Holds .reader-body and, when the source article carried real inline
+   images, .reader-images side by side - fills the width that used to sit
+   empty on wide screens for a text-only article.
+
+   `flex-wrap: wrap` here is deliberate, not decorative: a real bug was
+   found and fixed, 16 September 2026, right at the boundary between the
+   side-by-side and stacked layouts - at 1024px (a genuinely common
+   tablet-landscape/small-laptop width), the two children's flex-basis
+   values summed to less than the container, so the browser distributed
+   only the small remainder between them, leaving reader-body squeezed to
+   a measured 288px, far below anything readable, while `.reader-images`
+   still got most of the room. Giving each child a real `min-width` plus
+   `flex-wrap: wrap` on the container means the browser itself decides,
+   for real, whether both genuinely fit side by side at their minimum
+   readable/useful sizes - if they don't, `.reader-images` wraps onto its
+   own full-width row below the text automatically, no JS breakpoint
+   logic needed for this part. The `@media (max-width: 960px)` rule further
+   below only governs whether *multiple* images inside that panel lay out
+   as a row or a column - a separate, narrower concern. */
+.reader-main {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  overflow: hidden auto;
+}
+.reader-body {
+  flex: 2 1 500px;
+  min-width: 500px;
+  overflow-y: auto;
+  padding: 22px 30px 40px;
+  font-size: 16px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+/* The 900px readability cap only makes sense when .reader-images sits
+   beside it splitting the screen. A text/table-only article (no real
+   inline images extracted) has no sibling to share space with, so it
+   should genuinely fill the screen instead of leaving the rest empty --
+   Neko's explicit call, same reasoning as the image panel's own fix. */
+.reader-body:not(:only-child) { max-width: 900px; }
+
+/* Real markdown pipe-tables from source articles (ZDI's monthly patch
+   roundups among them) rendered as actual table markup instead of raw
+   escaped text, so wide Yes/No matrices stay legible against their own
+   real column headers. */
+.reader-table-caption {
+  opacity: 0.65;
+  font-size: 13px;
+  font-style: italic;
+  margin: 18px 0 10px;
+  white-space: normal;
+}
+.reader-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 26px;
+  border: 1px solid rgba(20,254,23,0.25);
+}
+.reader-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: max-content;
+  font-size: 13px;
+  white-space: normal;
+}
+.reader-table th, .reader-table td {
+  padding: 7px 10px;
+  border: 1px solid rgba(20,254,23,0.15);
+  text-align: left;
+  white-space: nowrap;
+}
+.reader-table thead th {
+  background: rgba(20,254,23,0.08);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 11px;
+}
+.reader-table td.cell-yes { color: #14fe17; font-weight: 600; }
+.reader-table td.cell-no { opacity: 0.35; }
+
+/* Real inline images from the source article, recolored toward the
+   phosphor palette via a CSS filter - the diagram's actual content is
+   never regenerated or reinterpreted, only its color treatment, so a
+   real attack-flow diagram stays factually accurate. Hover reveals the
+   true, unfiltered original at thumbnail size; clicking opens a full
+   zoomed real-color view (#image-lightbox) for actually reading fine
+   diagram detail.
+
+   A real bug found and fixed, 16 September 2026: a fixed 460px width
+   left a genuinely dead strip of empty screen on a wide primary monitor
+   (measured directly against the real live site at 1920px: reader-body
+   correctly stopped at its own 900px readability cap, but reader-images
+   never grew to claim the ~480px that left unclaimed, since a fixed
+   width can't respond to real available space). Fixed with a real flex
+   basis (`flex: 1 1 460px`, no max-width ceiling) so the panel actually
+   expands to claim whatever real space is left on the screen, on Neko's
+   explicit call to genuinely fill it rather than cap it at a "safe"
+   width. */
+.reader-images {
+  flex: 1 1 460px;
+  min-width: 400px;
+  overflow-y: auto;
+  padding: 22px 26px 40px;
+  border-left: 1px solid rgba(20,254,23,0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.reader-images .section-label { margin: 0; }
+/* Holds just the image cards, kept separate from the section label above
+   it so the label always stays its own full-width heading, never a flex
+   sibling sharing row space with the cards (see the mobile/tablet
+   breakpoint below for why that separation matters). */
+.reader-images-grid { display: flex; flex-direction: column; gap: 26px; }
+.reader-image-card { display: flex; flex-direction: column; gap: 8px; }
+.reader-image-index { font-size: 12px; opacity: 0.5; letter-spacing: 1px; }
+.reader-image {
+  width: 100%;
+  display: block;
+  border: 1px solid var(--green);
+  cursor: zoom-in;
+  filter: sepia(1) hue-rotate(70deg) saturate(4) brightness(0.85) contrast(1.05);
+  transition: filter 0.15s ease;
+}
+.reader-image:hover { filter: none; }
+.reader-image-original {
+  font-size: 11px;
+  opacity: 0.55;
+  text-decoration: none;
+  color: var(--green);
+  align-self: flex-end;
+}
+.reader-image-original:hover { opacity: 1; text-decoration: underline; }
+
+/* Full-size real-color zoom view - the whole point of zooming in is
+   reading fine detail on a real diagram, so this always shows true
+   colors, never the themed filter. Click again (or the close button /
+   Escape) to close; click-and-drag isn't needed since native image
+   scroll inside the overlay already lets a genuinely oversized diagram
+   be panned. */
+.image-lightbox:not([hidden]) {
+  position: absolute;
+  inset: 0;
+  z-index: 300;
+  background: rgba(13,15,11,0.94);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  overflow: auto;
+  cursor: zoom-out;
+}
+.image-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border: 1px solid var(--green);
+  box-shadow: 0 0 40px rgba(20,254,23,0.15);
+}
+.image-lightbox .reader-close {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  background: var(--bg);
+}
+.reader-source-link {
+  display: inline-block;
+  margin: 0 30px 20px;
+  font-size: 13px;
+  opacity: 0.6;
+  text-decoration: none;
+  color: var(--green);
+}
+.reader-source-link:hover { opacity: 1; text-decoration: underline; }
+
+/* Real MITRE ATT&CK matrix - tactics as columns, techniques as rows.
+   :not([hidden]) for the same reason as .reader-overlay/.list above. */
+.attack-view:not([hidden]) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.attack-search {
+  padding: 14px 30px 10px;
+  flex-shrink: 0;
+}
+.attack-search input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--green);
+  color: var(--green);
+  font-family: inherit;
+  font-size: 15px;
+  padding: 8px 12px;
+  outline: none;
+}
+.attack-search input::placeholder { color: var(--green); opacity: 0.4; }
+
+.attack-grid {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  gap: 2px;
+  padding: 0 30px 20px;
+}
+.attack-col {
+  flex: 0 0 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.attack-col-header {
+  font-size: 13px;
+  letter-spacing: 1px;
+  padding: 8px 6px;
+  border-bottom: 2px solid var(--green);
+  margin-bottom: 4px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+.attack-tech {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid rgba(20,254,23,0.25);
+  opacity: 0.35;
+  cursor: default;
+}
+.attack-tech.has-matches {
+  opacity: 1;
+  border-color: var(--green);
+  cursor: pointer;
+  background: var(--wash);
+}
+.attack-tech.has-matches:hover { background: var(--green); color: var(--bg); }
+.attack-tech .tech-count {
+  float: right;
+  font-weight: bold;
+}
+.attack-tech.dimmed-search { display: none; }
+
+/* Mobile breakpoint. The approved comp (_mockup_pipboy.html) is
+   desktop-only - fixed 1180px device, no mobile treatment - so this is
+   built fresh against the craft floor rather than copied from a reference.
+   Two real bugs this fixes: (1) .topnav had no overflow handling at all,
+   so at narrow widths the flex row centered and silently clipped tabs off
+   both edges - since .screen and html/body both use overflow:hidden for
+   the device-bezel look, there was no scroll path to recover them, so
+   ATT&CK (a real PRODUCT.md requirement, not a placeholder) was outright
+   unreachable on a phone, not just visually cramped. Giving .topnav its
+   own overflow-x:auto creates a local scroll region that works within the
+   screen's own clip boundary. (2) .row's title/meta sat side by side with
+   no breakpoint, squeezing article titles into ~180px and wrapping them
+   into 6-8 lines while CVE/date meta stayed pinned right - fixed by
+   stacking title above meta below this width. */
+@media (max-width: 640px) {
+  .device { margin: 6px; padding: 10px; border-radius: 16px; }
+  .screen { border-radius: 6px; }
+
+  .topnav {
+    justify-content: flex-start;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 26px;
+    padding: 40px 20px 12px;
+    margin: 0 10px;
+  }
+  .topnav .wordmark { left: 10px; }
+  .tab { font-size: 19px; flex-shrink: 0; }
+
+  .subnav { padding: 10px 20px 0; flex-wrap: wrap; gap: 16px; }
+  .search-bar { margin-left: 0; width: 100%; order: 10; }
+  .search-bar input { width: 100%; }
+  .list:not([hidden]), .panel, .attack-grid { padding-left: 20px; padding-right: 20px; }
+
+  .row { flex-direction: column; align-items: flex-start; padding: 10px 14px 10px 26px; }
+  .row .title { margin-right: 0; margin-bottom: 4px; }
+  .row .meta { flex-wrap: wrap; gap: 10px; }
+
+  .reader-title { font-size: 18px; max-width: 100%; }
+  .reader-header, .reader-meta, .reader-body { padding-left: 18px; padding-right: 18px; }
+
+  .footer { flex-wrap: wrap; padding: 10px 16px; gap: 8px; font-size: 13px; }
+  .footer .gauge { width: 140px; }
+}
+
+/* Reader image stacking - its own wider breakpoint, separate from the
+   640px phone-nav-overflow fix above, because the two problems have
+   different real thresholds: a tablet (iPad portrait is 768px, landscape
+   1024px) is plenty wide for the horizontal top nav, but not wide enough
+   to fit both a genuinely readable text column and a real image panel
+   side by side - doing the math against reader-body's own 900px
+   readability target shows the side-by-side layout only has room to work
+   with above roughly 950-1000px total width, so anything narrower than
+   that (real tablets included, not just phones) needs the stacked
+   treatment, not just phones.
+
+   The image grid uses flex-wrap with a flex-grow basis per card, not a
+   hardcoded 50/50 split, on Neko's explicit correction after the desktop
+   panel's own fixed-width bug repeated itself here: a single image would
+   otherwise only fill half the row, leaving the other half empty -
+   exactly the same "half my screen is empty" complaint, just on mobile.
+   (A first attempt used CSS Grid's `auto-fit`/`minmax`, which collapses
+   empty tracks correctly in isolation but did not reliably do so here -
+   confirmed live, a single real image still left a genuinely blank
+   second track. Flex-grow is the same proven technique already used for
+   the desktop panel fix above, verified in isolation to behave
+   correctly for this exact one-item case before trusting it here too.)
+   A single image grows to fill the whole row; two or more share it and
+   wrap onto new rows as needed - genuinely adapting to both image count
+   and real screen width, not a fixed column count. */
+@media (max-width: 960px) {
+  /* flex-wrap: nowrap is deliberate, not redundant: the base rule's own
+     `flex-wrap: wrap` (added for the desktop side-by-side safety net
+     above) combined with `flex-direction: column` here does NOT produce
+     a single vertical stack - flex wrapping happens along the cross
+     axis, which for a column-direction container is horizontal, so a
+     tall reader-body would fill the first "column line" and wrap
+     reader-images into a second column line placed beside it, not below
+     it. Confirmed live: reader-images was rendering at the same y as
+     reader-body, offset to its right, despite flex-direction correctly
+     computing as "column". */
+  .reader-main { flex-direction: column; flex-wrap: nowrap; overflow-y: auto; overflow-x: hidden; }
+  .reader-body { overflow-y: visible; max-width: 100%; }
+  .reader-images {
+    width: 100%;
+    flex: none;
+    border-left: none;
+    border-top: 1px solid rgba(20,254,23,0.25);
+    overflow-y: visible;
+    padding: 18px;
+  }
+  .reader-images-grid { flex-direction: row; flex-wrap: wrap; gap: 20px; }
+  .reader-image-card { flex: 1 1 280px; }
+}
