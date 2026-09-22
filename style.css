@@ -777,3 +777,16 @@ body {
 .tag-epss { border: 1px solid currentColor; opacity: 0.55; }
 .row.selected .tag-kev { background: #7a0d00; }
 .row.selected .tag-wild { border-color: #7a0d00; color: #7a0d00; }
+
+/* Freshness line under the footer chips: how recently each lookup ran.
+   Deliberately quiet -- it is a reassurance most of the time, and only the
+   "awaiting severity" part is worth noticing. */
+.freshness {
+  font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase;
+  opacity: 0.5; margin-top: 6px; text-align: right;
+}
+.fresh-warn { color: var(--danger); opacity: 0.9; }
+.tag-stale {
+  font-size: 9px; letter-spacing: 0.06em; padding: 0 3px;
+  border: 1px dashed currentColor; opacity: 0.6; margin-left: 2px;
+}

@@ -165,6 +165,38 @@ def fetch_kev_catalog() -> dict[str, dict] | None:
     return {v["cveID"]: v for v in data.get("vulnerabilities", []) if v.get("cveID")}
 
 
+# EPSS is recalculated daily by FIRST.org. A score older than this is shown
+# with a stale marker in the dashboard rather than silently trusted; the next
+# run refreshes it.
+EPSS_STALE_AFTER_DAYS = 2
+
+# How many NVD lookups a post-ingest refresh does. Small on purpose: this
+# runs on every "run check now", and its job is to give the CVEs that just
+# arrived a severity, not to backfill history. A real backfill is an
+# explicit `enrich --limit N`.
+POST_INGEST_NVD_LIMIT = 40
+
+
+def refresh_after_ingest(conn) -> dict:
+    """The freshness pass that runs at the end of every check, so what the
+    dashboard shows has been re-verified rather than just re-listed.
+
+    Cheap by design: EPSS is batched (one request per 100 CVEs) and the KEV
+    catalog is a single request, so the facts that change daily are always
+    current. NVD is bounded to POST_INGEST_NVD_LIMIT because it is one
+    rate-limited request per CVE; the priority order in
+    db.cves_needing_nvd() means the CVEs that just arrived, and anything
+    already flagged high ticket, get theirs first.
+    """
+    import extract  # local import: keeps ingest's import graph unchanged
+
+    stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
+    summary = enrich(conn, nvd_limit=POST_INGEST_NVD_LIMIT)
+    summary["exploit_claims"] = stats["cve_reports"]
+    summary["exploit_cves"] = stats["distinct_cves"]
+    return summary
+
+
 def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
            do_epss: bool = True, do_kev: bool = True) -> dict:
     api_key = nvd_api_key()

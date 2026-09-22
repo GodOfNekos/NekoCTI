@@ -678,6 +678,32 @@ def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int
     return marked
 
 
+def get_freshness(conn: sqlite3.Connection) -> dict:
+    """How current the data actually is, for the dashboard's own header.
+
+    The archive is deliberately never pruned (Neko's call, 22 September
+    2026: at ~27MB it costs nothing, and old coverage is still evidence).
+    Freshness is therefore about the facts being re-checked, not about
+    throwing rows away, so this reports when each lookup last ran and how
+    much is still waiting."""
+    one = lambda sql: conn.execute(sql).fetchone()[0]
+    return {
+        "last_article_fetched_at": one("SELECT MAX(fetched_at) FROM articles"),
+        "last_epss_at": one("SELECT MAX(epss_checked_at) FROM cve_scores"),
+        "epss_data_date": one("SELECT MAX(epss_date) FROM cve_scores"),
+        "last_kev_at": one("SELECT MAX(kev_checked_at) FROM cve_scores"),
+        "last_nvd_at": one("SELECT MAX(nvd_checked_at) FROM cve_scores"),
+        "cves_total": one("SELECT COUNT(DISTINCT cve_id) FROM cve_mentions"),
+        "cves_awaiting_nvd": one(
+            "SELECT COUNT(DISTINCT cm.cve_id) FROM cve_mentions cm "
+            "LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id "
+            "WHERE cs.nvd_checked_at IS NULL"),
+        "cves_with_severity": one("SELECT COUNT(*) FROM cve_scores WHERE nvd_base_score IS NOT NULL"),
+        "kev_listed": one("SELECT COUNT(*) FROM cve_scores WHERE kev_listed = 1"),
+        "reported_exploited": one("SELECT COUNT(DISTINCT cve_id) FROM cve_exploit_reports"),
+    }
+
+
 def get_cve_scores(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sqlite3.Row]:
     if not cve_ids:
         return {}

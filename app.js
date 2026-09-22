@@ -43,7 +43,10 @@ function exploitTags(c) {
   if (c.kev) tags.push(`<span class="tag-kev">KEV${c.kev_ransomware === "Known" ? " RANSOMWARE" : ""}</span>`);
   else if (c.exploit_reports) tags.push(`<span class="tag-wild">EXPLOITED REPORTED</span>`);
   if (c.epss_percentile !== null && c.epss_percentile !== undefined && c.epss_percentile >= 0.95) {
-    tags.push(`<span class="tag-epss">EPSS ${(c.epss_percentile * 100).toFixed(0)}th</span>`);
+    // EPSS is recalculated daily; an old figure is flagged rather than
+    // trusted silently, and the next check refreshes it.
+    const stale = c.epss_stale ? ` <span class="tag-stale" title="EPSS from ${c.epss_date}, refreshed on the next check">STALE</span>` : "";
+    tags.push(`<span class="tag-epss">EPSS ${(c.epss_percentile * 100).toFixed(0)}th</span>${stale}`);
   }
   return tags.join(" ");
 }
@@ -1012,6 +1015,44 @@ function startIngestPolling() {
   ingestPollTimer = setInterval(pollIngestStatus, 3000);
 }
 
+// "12 minutes ago" style, or an absolute date once it stops being useful.
+function ago(iso) {
+  if (!iso) return "never";
+  const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
+  const mins = Math.round((Date.now() - then.getTime()) / 60000);
+  if (!isFinite(mins)) return "never";
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60 * 24) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
+}
+
+// The archive is deliberately never pruned, so freshness is about the facts
+// having been re-checked, not about the library being small.
+function renderFreshness(f) {
+  const el = document.getElementById("freshness-line");
+  if (!el || !f) return;
+  const waiting = f.cves_awaiting_nvd
+    ? ` &middot; <span class="fresh-warn">${f.cves_awaiting_nvd} CVE${f.cves_awaiting_nvd === 1 ? "" : "s"} awaiting severity</span>`
+    : "";
+  el.innerHTML =
+    `LAST CHECK ${ago(f.last_article_fetched_at)}` +
+    ` &middot; EPSS ${ago(f.last_epss_at)}${f.epss_data_date ? ` (data ${f.epss_data_date})` : ""}` +
+    ` &middot; KEV ${ago(f.last_kev_at)}` +
+    ` &middot; SEVERITY ${f.cves_with_severity}/${f.cves_total}` +
+    ` &middot; ${f.kev_listed} KEV &middot; ${f.reported_exploited} REPORTED EXPLOITED` +
+    waiting;
+}
+
+async function refreshFreshness() {
+  try {
+    const status = await fetchJSON("/api/ingest/status");
+    renderFreshness(status.freshness);
+  } catch (err) {
+    // The dashboard's own error states cover an unreachable backend.
+  }
+}
+
 async function pollIngestStatus() {
   let status;
   try {
@@ -1031,11 +1072,19 @@ async function pollIngestStatus() {
   clearInterval(ingestPollTimer);
   ingestPollTimer = null;
 
+  renderFreshness(status.freshness);
+
   if (status.error) {
     setRunCheckIdle("CHECK FAILED");
   } else if (status.results) {
     const totalNew = status.results.reduce((sum, r) => sum + (r.new || 0), 0);
-    setRunCheckIdle(`DONE (+${totalNew} NEW)`);
+    // The check also re-verifies the facts (see enrich.refresh_after_ingest),
+    // so a run that found no new articles still did real work.
+    const e = status.enrich;
+    const extra = status.enrich_error
+      ? ", REFRESH FAILED"
+      : e ? `, ${e.nvd_scored || 0} SEVERITY, ${e.epss_updated || 0} EPSS` : "";
+    setRunCheckIdle(`DONE (+${totalNew} NEW${extra})`);
     refresh();
   } else {
     setRunCheckIdle("RUN CHECK NOW");
@@ -1073,3 +1122,4 @@ runCheckBtn.addEventListener("click", async () => {
 })();
 
 refresh();
+refreshFreshness();

@@ -58,8 +58,28 @@ def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int) -> dic
         "kev_ransomware": (s["kev_ransomware"] if s else None),
         "epss": s["epss_score"] if s else None,
         "epss_percentile": s["epss_percentile"] if s else None,
+        "epss_date": s["epss_date"] if s else None,
+        # EPSS is recalculated daily, so an old score is a real caveat
+        # rather than a fact. Marked, never hidden; the next check refreshes
+        # it.
+        "epss_stale": _is_stale(s["epss_date"]) if s else False,
         "exploit_reports": report_count,
     }
+
+
+def _is_stale(epss_date: str | None) -> bool:
+    if not epss_date:
+        return False
+    try:
+        d = datetime.fromisoformat(epss_date).date()
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc).date() - d).days > enrich_stale_days()
+
+
+def enrich_stale_days() -> int:
+    import enrich as enrich_mod
+    return enrich_mod.EPSS_STALE_AFTER_DAYS
 
 
 def _serialize_article(conn, row, include_body: bool = False) -> dict:
@@ -450,8 +470,26 @@ _ingest_state: dict = {
 def _run_ingest_job() -> None:
     try:
         results = ingest.run_all()
+        # Re-check the facts as well as fetching new articles, so the
+        # dashboard is current rather than merely longer: EPSS and the KEV
+        # catalog change daily, and CVEs that just arrived have no severity
+        # yet. Cheap parts always run; NVD is bounded (see enrich.py).
+        # A failure here must not lose a successful ingest, so it is
+        # reported separately rather than raised.
+        enrich_summary, enrich_error = None, None
+        try:
+            import enrich as enrich_mod
+            conn = db.connect()
+            try:
+                enrich_summary = enrich_mod.refresh_after_ingest(conn)
+            finally:
+                conn.close()
+        except Exception as e:
+            enrich_error = str(e)
         with _ingest_lock:
             _ingest_state["results"] = results
+            _ingest_state["enrich"] = enrich_summary
+            _ingest_state["enrich_error"] = enrich_error
             _ingest_state["error"] = None
     except Exception as e:
         with _ingest_lock:
@@ -481,7 +519,13 @@ def start_ingest_run() -> bool:
 
 def get_ingest_status() -> dict:
     with _ingest_lock:
-        return dict(_ingest_state)
+        state = dict(_ingest_state)
+    conn = db.connect()
+    try:
+        state["freshness"] = db.get_freshness(conn)
+    finally:
+        conn.close()
+    return state
 
 
 _STATIC_TYPES = {

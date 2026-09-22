@@ -37,6 +37,7 @@ def cmd_ingest(_args: argparse.Namespace) -> None:
             continue
         print(f"[{r['source']}] seen={r['seen']} new={r['new']} "
               f"high_ticket={r['high_ticket']} skipped_304={r['skipped_304']}")
+    _refresh_after_ingest()
 
 
 def cmd_digest(args: argparse.Namespace) -> None:
@@ -99,6 +100,22 @@ def cmd_archive(args: argparse.Namespace) -> None:
                             for c in cves]
                 print(f"  CVEs: {', '.join(cve_strs)}")
             print()
+    finally:
+        conn.close()
+
+
+def _refresh_after_ingest() -> None:
+    """Same freshness pass the dashboard's check button runs, so the CLI and
+    the button behave identically. Never allowed to fail the ingest."""
+    import enrich
+
+    conn = db.connect()
+    try:
+        s = enrich.refresh_after_ingest(conn)
+        print(f"  refreshed: EPSS {s['epss_updated']}, KEV-listed {s['kev_listed']}, "
+              f"NVD +{s['nvd_scored']}, exploitation claims {s['exploit_claims']}")
+    except Exception as e:
+        print(f"  freshness pass failed (articles are still ingested): {e}")
     finally:
         conn.close()
 

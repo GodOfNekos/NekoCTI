@@ -92,3 +92,21 @@ in seconds.
 An article is promoted to **high ticket** when it reports exploitation, or
 mentions a CVE that is KEV-listed, scores 9.0+ at NVD, or sits at or above
 the 95th EPSS percentile. Promotion only ever adds the flag.
+
+### Freshness
+
+Every check (the dashboard's **Run check now**, or `main.py ingest`) ends with
+a refresh pass, so a run re-verifies facts as well as fetching articles:
+EPSS, the KEV catalog, exploitation reporting on the new text, and up to 40
+NVD lookups so CVEs that just arrived get a severity. It costs about two
+seconds when everything is already current, and a failure there is reported
+separately rather than losing a successful ingest.
+
+The dashboard footer shows when each lookup last ran, how many CVEs carry a
+severity and how many are still waiting. An EPSS score older than two days
+is marked `STALE` next to its percentile rather than being hidden; the next
+check refreshes it.
+
+Nothing is ever deleted for age. The archive is around 27MB, old coverage is
+still evidence, and a retention rule measured against the real library would
+have removed 63% of it along with every article referencing 3,245 CVEs.
