@@ -6,6 +6,8 @@
     uv run python main.py archive --limit 20 # raw recent-entries listing
     uv run python main.py classify           # run real ATT&CK classification on unclassified articles
     uv run python main.py classify-pocs      # tag CVEs with real PoC evidence against MITRE ATT&CK
+    uv run python main.py enrich             # NVD severity, EPSS, CISA KEV, and in-the-wild reporting
+    uv run python main.py enrich --limit 500 # same, allowing more (rate-limited) NVD lookups this run
 """
 
 from __future__ import annotations
@@ -101,6 +103,36 @@ def cmd_archive(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def cmd_enrich(args: argparse.Namespace) -> None:
+    import enrich
+    import extract
+
+    db.init_db()
+    conn = db.connect()
+    try:
+        if not args.no_backfill:
+            stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
+            print(f"In-the-wild reporting:    {stats['cve_reports']} claim(s) across "
+                  f"{stats['distinct_cves']} CVE(s), {stats['articles_changed']} article flag(s) changed")
+
+        summary = enrich.enrich(
+            conn,
+            nvd_limit=args.limit,
+            do_nvd=not args.no_nvd,
+            do_epss=not args.no_epss,
+            do_kev=not args.no_kev,
+        )
+        print(f"EPSS scores updated:      {summary['epss_updated']}")
+        print(f"CVEs listed in CISA KEV:  {summary['kev_listed']}"
+              + ("  (catalog fetch failed)" if summary.get("kev_failed") else ""))
+        print(f"NVD lookups:              {summary['nvd_checked']} checked, "
+              f"{summary['nvd_scored']} with a score, {summary['nvd_failed']} failed"
+              f"{'' if summary['nvd_key'] else '  (no API key: 5 requests/30s)'}")
+        print(f"Promoted to high ticket:  {summary['promoted_high_ticket']}")
+    finally:
+        conn.close()
+
+
 def cmd_classify(args: argparse.Namespace) -> None:
     import attack
 
@@ -182,6 +214,17 @@ def main() -> int:
     p_classify_pocs.add_argument("--limit", type=int, default=50,
                                   help="max CVEs to run the LLM tier against this run (default: 50)")
     p_classify_pocs.set_defaults(func=cmd_classify_pocs)
+
+    p_enrich = sub.add_parser("enrich", help="NVD severity, EPSS, CISA KEV and in-the-wild reporting")
+    p_enrich.add_argument("--limit", type=int, default=200,
+                           help="max NVD lookups this run (default: 200; NVD allows 5 requests/30s "
+                                "without an API key, 50 with NVD_API_KEY set)")
+    p_enrich.add_argument("--no-nvd", action="store_true", help="skip the NVD severity lookups")
+    p_enrich.add_argument("--no-epss", action="store_true", help="skip the EPSS refresh")
+    p_enrich.add_argument("--no-kev", action="store_true", help="skip the CISA KEV catalog check")
+    p_enrich.add_argument("--no-backfill", action="store_true",
+                           help="skip re-scanning stored articles for in-the-wild exploitation reporting")
+    p_enrich.set_defaults(func=cmd_enrich)
 
     args = parser.parse_args()
     args.func(args)

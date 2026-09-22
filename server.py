@@ -40,6 +40,28 @@ def _cutoff_iso(range_key: str) -> str | None:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
+def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int) -> dict:
+    """One CVE as the dashboard needs it: what the article claimed, what NVD
+    says, and the two separate exploitation signals -- KEV (confirmed, from
+    CISA) and EPSS (predicted). `exploit_reports` counts captured articles
+    that report this CVE as exploited, which often precedes a KEV entry."""
+    s = score_row
+    return {
+        "id": cve_id,
+        "cvss": article_cvss,
+        "nvd_cvss": s["nvd_base_score"] if s else None,
+        "nvd_severity": s["nvd_severity"] if s else None,
+        "nvd_version": s["nvd_cvss_version"] if s else None,
+        "cwes": s["nvd_cwes"] if s else None,
+        "kev": bool(s["kev_listed"]) if s else False,
+        "kev_date": s["kev_date_added"] if s else None,
+        "kev_ransomware": (s["kev_ransomware"] if s else None),
+        "epss": s["epss_score"] if s else None,
+        "epss_percentile": s["epss_percentile"] if s else None,
+        "exploit_reports": report_count,
+    }
+
+
 def _serialize_article(conn, row, include_body: bool = False) -> dict:
     cves = conn.execute(
         "SELECT cve_id, cvss_score FROM cve_mentions WHERE article_id = ?",
@@ -57,6 +79,13 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "SELECT DISTINCT campaign_name FROM campaign_matches WHERE article_id = ?",
         (row["id"],),
     ).fetchall()
+    # Enrichment facts per CVE (enrich.py): official severity, CISA KEV
+    # membership (confirmed exploitation) and the EPSS percentile
+    # (predicted). The article's own claimed score stays as `cvss`, so the
+    # two are never confused.
+    _cve_ids = [c["cve_id"] for c in cves]
+    _scores = db.get_cve_scores(conn, _cve_ids)
+    _reports = db.get_exploit_reports(conn, _cve_ids)
     data = {
         "id": row["id"],
         "title": row["title"],
@@ -66,7 +95,9 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "high_ticket": bool(row["high_ticket"]),
         "is_breach": bool(row["is_breach"]),
         "mentions_poc": bool(row["mentions_poc"]),
-        "cves": [{"id": c["cve_id"], "cvss": c["cvss_score"]} for c in cves],
+        "exploited_in_wild": bool(row["exploited_in_wild"]),
+        "cves": [_cve_payload(c["cve_id"], c["cvss_score"], _scores.get(c["cve_id"]),
+                              _reports.get(c["cve_id"], 0)) for c in cves],
         "vendors": [v["vendor_term"] for v in vendors],
         "entities": [e["entity_name"] for e in entities],
         "campaigns": [c["campaign_name"] for c in campaigns],
@@ -245,6 +276,10 @@ def get_pocs_overview() -> dict:
 
         cve_ids = set(repo_rows) | set(mention_counts)
         attack_techniques = db.get_cve_attack_techniques_bulk(conn, list(cve_ids))
+        # Severity and exploitation facts for the same set, fetched in two
+        # queries rather than per CVE inside the loop below.
+        score_rows = db.get_cve_scores(conn, list(cve_ids))
+        report_counts = db.get_exploit_reports(conn, list(cve_ids))
         cves = []
         for cve_id in cve_ids:
             cvss_row = conn.execute(
@@ -299,6 +334,10 @@ def get_pocs_overview() -> dict:
                 "cvss": cvss_row["cvss_score"] if cvss_row else None,
                 "article_count": article_count["c"],
                 "attack_techniques": attack_techniques.get(cve_id, []),
+                **{k: v for k, v in _cve_payload(
+                    cve_id, cvss_row["cvss_score"] if cvss_row else None,
+                    score_rows.get(cve_id), report_counts.get(cve_id, 0),
+                ).items() if k not in ("id", "cvss")},
             })
         cves.sort(key=lambda c: c["latest_activity_at"] or "", reverse=True)
         return {"cves": cves}

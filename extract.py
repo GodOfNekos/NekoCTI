@@ -261,3 +261,108 @@ def mentions_poc(title: str, body_text: str) -> bool:
             continue
         return True
     return False
+
+
+# Real-world exploitation, which is a different claim from "a PoC exists"
+# (Neko's point, 22 September 2026): exploit code being public says nothing
+# about whether anyone is actually using it, and a vulnerability can be
+# exploited in the wild with no public PoC at all.
+#
+# CISA KEV is the authoritative answer and is recorded per CVE by enrich.py,
+# but it lags: reporting routinely says "actively exploited" days or weeks
+# before an entry is added, and plenty of real exploitation never gets a KEV
+# entry. This catches what the captured coverage itself states.
+#
+# Deliberately narrow. "Exploited" alone is far too common in vulnerability
+# writeups describing what an attacker *could* do, so every branch requires
+# wording that asserts real use: an in-the-wild/active qualifier, an
+# observed-attacks phrasing, or a zero-day being exploited. Conditional and
+# hypothetical framings ("could be exploited", "if exploited", "may allow an
+# attacker to exploit") are excluded by the negation check below.
+_EXPLOITED_WILD_RE = re.compile(
+    r"\b("
+    r"(?:actively |currently |being )?exploited in the wild|"
+    r"in[- ]the[- ]wild exploitation|"
+    r"under (?:active )?(?:attack|exploitation)|"
+    r"actively (?:being )?exploited|"
+    r"exploitation (?:has been |was |is )?(?:actively )?(?:observed|detected|seen|reported|ongoing)|"
+    r"observed (?:active )?exploitation|"
+    r"evidence of (?:active )?exploitation|"
+    r"exploited (?:as |in )(?:a )?zero[- ]day|"
+    r"zero[- ]day (?:attack|exploitation)|"
+    r"weaponized in (?:real[- ]world )?attacks|"
+    r"used in (?:real[- ]world |active |ongoing )?attacks|"
+    r"attackers? (?:are |have been |were )(?:actively )?exploiting|"
+    r"threat actors? (?:are |have been |were )(?:actively )?exploiting|"
+    r"added to (?:CISA'?s? )?(?:known exploited vulnerabilities|KEV)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Conditional framing, checked in the words immediately before a match:
+# "could be exploited in the wild" is a warning, not a report.
+_EXPLOITED_NEGATION_RE = re.compile(
+    r"\b(no|not|n't|without|could|would|might|may|if|unless|potential(?:ly)?|"
+    r"risk of|warns? of|before it is|prevent)\b(?:\s+\w+){0,3}\s*$",
+    re.IGNORECASE,
+)
+
+
+# An exploitation claim is attached to a CVE when both appear in the same
+# sentence. Tuned against real data on 22 September 2026, scoring each
+# candidate rule by how well it agreed with CISA KEV (the authoritative
+# answer to the same question) across every captured article:
+#
+#   same sentence   197 CVEs, 74% in KEV   <- chosen
+#   sentence +/-1   211 CVEs, 73% in KEV
+#   600-char window  80 CVEs, 59% in KEV
+#
+# The character window was both less precise and less complete: in a monthly
+# roundup it attached a claim to whichever CVE happened to sit nearby, while
+# missing list-formatted reports where the sentence is long. Sentence
+# scoping also drops the general commentary that an article-level flag
+# caught ("zero-day exploitation minimises detection", or a vendor blog
+# using "an actively exploited Chrome vulnerability" as a worked example),
+# because those sentences name no CVE.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _exploitation_matches(text: str):
+    """Every exploitation phrase in the text that survives the conditional
+    check ("could be exploited" is a warning, not a report)."""
+    for m in _EXPLOITED_WILD_RE.finditer(text):
+        window_before = text[max(0, m.start() - 40):m.start()]
+        if _EXPLOITED_NEGATION_RE.search(window_before):
+            continue
+        yield m
+
+
+def exploitation_evidence(title: str, body_text: str) -> tuple[bool, set[str]]:
+    """Reported real-world exploitation, as (title_claim, cve_ids).
+
+    `cve_ids` are the CVEs this text actually claims are being exploited:
+    a CVE ID named in the same sentence as an exploitation phrase.
+    `title_claim` is True when the headline itself reports
+    exploitation, which is a deliberate second route: a headline like
+    "Cisco warns of actively exploited zero-day" is a real report even before
+    the CVE is named further down.
+
+    Deliberately not a whole-article flag: a monthly patch roundup mentioning
+    that two of ninety CVEs are exploited should mark those two, not tar the
+    other eighty-eight."""
+    text = title + " " + body_text
+    title_claim = any(True for _ in _exploitation_matches(title))
+
+    cve_ids: set[str] = set()
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        if any(True for _ in _exploitation_matches(sentence)):
+            cve_ids.update(m.group(0).upper() for m in CVE_RE.finditer(sentence))
+    return title_claim, cve_ids
+
+
+def exploited_in_wild(title: str, body_text: str) -> bool:
+    """True when this text reports real exploitation of a named CVE, or says
+    so in its own headline. Kept as the article-level flag; the per-CVE
+    detail comes from exploitation_evidence()."""
+    title_claim, cve_ids = exploitation_evidence(title, body_text)
+    return bool(title_claim or cve_ids)

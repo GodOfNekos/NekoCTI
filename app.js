@@ -27,15 +27,42 @@ function errorHTML(err) {
   return `<div class="empty-state error-state">SIGNAL LOST - COULD NOT REACH NEKOCTI BACKEND.<br>${escapeHtml(String(err.message || err))}</div>`;
 }
 
+// The severity to show for a CVE: NVD's official base score when enrichment
+// has fetched it, otherwise whatever the article's own text claimed. NVD
+// wins because the article figure is often the vendor's own, or absent.
+function cveScore(c) {
+  return c.nvd_cvss !== null && c.nvd_cvss !== undefined ? c.nvd_cvss : c.cvss;
+}
+
+// Exploitation, shortest first: KEV is CISA confirming real-world use, an
+// exploit report is our own captured coverage saying so (which often comes
+// first), and EPSS is a prediction. Deliberately distinct from "a PoC
+// exists", which says only that code is public.
+function exploitTags(c) {
+  const tags = [];
+  if (c.kev) tags.push(`<span class="tag-kev">KEV${c.kev_ransomware === "Known" ? " RANSOMWARE" : ""}</span>`);
+  else if (c.exploit_reports) tags.push(`<span class="tag-wild">EXPLOITED REPORTED</span>`);
+  if (c.epss_percentile !== null && c.epss_percentile !== undefined && c.epss_percentile >= 0.95) {
+    tags.push(`<span class="tag-epss">EPSS ${(c.epss_percentile * 100).toFixed(0)}th</span>`);
+  }
+  return tags.join(" ");
+}
+
 function formatMeta(article) {
   const bits = [];
   if (article.cves.length === 1) {
     const c = article.cves[0];
-    bits.push(c.cvss ? `<span class="${c.cvss >= 9 ? 'cve-crit' : ''}">${c.id} (${c.cvss})</span>` : c.id);
+    const score = cveScore(c);
+    const label = score ? `<span class="${score >= 9 ? 'cve-crit' : ''}">${c.id} (${score})</span>` : c.id;
+    bits.push([label, exploitTags(c)].filter(Boolean).join(" "));
   } else if (article.cves.length > 1) {
-    const scores = article.cves.map((c) => c.cvss).filter((s) => s !== null);
+    const scores = article.cves.map(cveScore).filter((s) => s !== null && s !== undefined);
     let note = `${article.cves.length} CVEs`;
     if (scores.length) note += `, highest ${Math.max(...scores)}`;
+    const kev = article.cves.filter((c) => c.kev).length;
+    const wild = article.cves.filter((c) => !c.kev && c.exploit_reports).length;
+    if (kev) note += ` <span class="tag-kev">${kev} KEV</span>`;
+    if (wild) note += ` <span class="tag-wild">${wild} REPORTED EXPLOITED</span>`;
     bits.push(note);
   }
   if (article.vendors.length) {
@@ -171,13 +198,25 @@ async function openReader(id) {
   const metaParts = [];
   if (article.published_at) metaParts.push(article.published_at);
   if (article.cves.length) {
-    metaParts.push(article.cves.map((c) => c.cvss ? `${c.id} (${c.cvss})` : c.id).join(", "));
+    metaParts.push(article.cves.map((c) => {
+      const score = cveScore(c);
+      const sev = c.nvd_severity ? ` ${c.nvd_severity}` : "";
+      const base = score ? `${c.id} (${score}${sev})` : c.id;
+      const tags = [];
+      if (c.kev) tags.push(`KEV${c.kev_date ? ` ${c.kev_date}` : ""}${c.kev_ransomware === "Known" ? ", RANSOMWARE" : ""}`);
+      else if (c.exploit_reports) tags.push("EXPLOITATION REPORTED");
+      if (c.epss_percentile !== null && c.epss_percentile !== undefined) {
+        tags.push(`EPSS ${(c.epss_percentile * 100).toFixed(0)}th`);
+      }
+      return tags.length ? `${base} [${tags.join(" / ")}]` : base;
+    }).join(", "));
   }
   if (article.vendors.length) metaParts.push(`VENDORS: ${article.vendors.join(", ")}`);
   if (article.entities.length) metaParts.push(`TRACKED: ${article.entities.join(", ")}`);
   if (article.campaigns && article.campaigns.length) metaParts.push(`CAMPAIGN: ${article.campaigns.join(", ")}`);
   if (article.is_breach) metaParts.push("FLAGGED: MAJOR BREACH");
   if (article.mentions_poc) metaParts.push("PoC/EXPLOIT DISCUSSED");
+  if (article.exploited_in_wild) metaParts.push("REPORTS EXPLOITATION IN THE WILD");
 
   // Real inline images the source article carried, shown alongside the
   // text instead of the reader's right side sitting empty on wide
@@ -472,7 +511,8 @@ async function renderPocsOverview() {
   const rows = cves.map((c) => `
     <div class="row poc-row" data-cve="${c.cve_id}" data-search="${c.cve_id.toLowerCase()} ${(c.title || "").toLowerCase()} ${c.vendors.join(" ").toLowerCase()} ${c.attack_techniques.map((t) => t.technique_id).join(" ").toLowerCase()}">
       <span class="title">
-        ${c.cve_id}${c.cvss ? ` <span class="${c.cvss >= 9 ? 'cve-crit' : ''}">(CVSS ${c.cvss})</span>` : ""}
+        ${c.cve_id}${cveScore(c) ? ` <span class="${cveScore(c) >= 9 ? 'cve-crit' : ''}">(CVSS ${cveScore(c)}${c.nvd_severity ? ` ${c.nvd_severity}` : ""})</span>` : ""}
+        ${exploitTags(c) ? ` ${exploitTags(c)}` : ""}
         ${c.title ? `<div class="poc-cve-desc">${escapeHtml(c.title)}</div>` : ""}
         ${c.vendors.length ? `<div class="poc-cve-vendors">${c.vendors.map(escapeHtml).join(", ")}</div>` : ""}
         ${c.attack_techniques.length ? `<div class="poc-attack-tags">${c.attack_techniques.map((t) =>

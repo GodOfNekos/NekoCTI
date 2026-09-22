@@ -12,6 +12,11 @@ services:
       # each container gets its own separate tailnet identity, same
       # reasoning as why they're separate containers in the first place.
       - TS_HOSTNAME=${TS_HOSTNAME:-nekocti}
+      # Optional, from .env (see .env.example): a free NVD API key raises
+      # the CVE-severity lookup limit from 5 requests per 30s to 50, which
+      # is the difference between a ~7 hour and a ~90 minute full backfill.
+      # `enrich` works without it, just slower, so no default is needed.
+      - NVD_API_KEY=${NVD_API_KEY:-}
       # host.docker.internal reaches the Ollama instance already running
       # on this machine's own host -- localhost/127.0.0.1 from inside the
       # container would mean the container itself, which has no Ollama of

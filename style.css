@@ -755,3 +755,25 @@ body {
   .reader-images-grid { flex-direction: row; flex-wrap: wrap; gap: 20px; }
   .reader-image-card { flex: 1 1 280px; }
 }
+
+/* Exploitation signals on a CVE, added 22 September 2026. Three different
+   claims, deliberately styled apart rather than merged into one "risk"
+   badge, because they answer different questions:
+     KEV   - CISA confirms real-world exploitation. Strongest, so it gets
+             the danger colour as a solid pill.
+     WILD  - our own captured coverage reports exploitation, which usually
+             lands before a KEV entry does. Outlined, not solid: it is
+             reporting, not an authority's confirmation.
+     EPSS  - FIRST.org's predicted probability, shown only at the 95th
+             percentile and above. Dimmest: a forecast, not an observation.
+   A public PoC (poc-* classes above) is a fourth, separate thing: exploit
+   code exists, which says nothing about whether anyone is using it. */
+.tag-kev, .tag-wild, .tag-epss {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 1px 5px; border-radius: 2px; margin-left: 4px; white-space: nowrap;
+}
+.tag-kev { background: var(--danger); color: var(--bg); font-weight: bold; }
+.tag-wild { border: 1px solid var(--danger); color: var(--danger); }
+.tag-epss { border: 1px solid currentColor; opacity: 0.55; }
+.row.selected .tag-kev { background: #7a0d00; }
+.row.selected .tag-wild { border-color: #7a0d00; color: #7a0d00; }

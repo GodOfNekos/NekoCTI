@@ -232,6 +232,7 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
         high_ticket = extract.is_high_ticket(cve_mentions)
         breach = extract.is_breach(title, text_for_extraction)
         poc_mentioned = extract.mentions_poc(title, text_for_extraction)
+        exploited = extract.exploited_in_wild(title, text_for_extraction)
 
         article_id = db.insert_article(
             conn,
@@ -246,6 +247,7 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
             high_ticket=high_ticket,
             is_breach=breach,
             mentions_poc=poc_mentioned,
+            exploited_in_wild=exploited,
         )
         if article_id is None:
             # The link+guid pre-check above should have already caught this;

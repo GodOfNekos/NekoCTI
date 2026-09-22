@@ -146,6 +146,49 @@ CREATE TABLE IF NOT EXISTS cve_attack_checks (
 -- `articles` itself as the single source of truth; the three triggers
 -- below just keep this index in sync with it, so a search never returns
 -- stale text after an edit.
+-- Per-CVE enrichment, 22 September 2026. One row per CVE ID, filled by
+-- enrich.py from three real lookups, kept apart from cve_mentions.cvss_score
+-- (which is whatever an article's own text claimed) so the two never
+-- overwrite each other and the dashboard can say where a score came from:
+--   NVD   -- the official CVSS base score, severity, vector and CWE
+--   EPSS  -- FIRST.org's predicted probability of exploitation, and its
+--            percentile against every scored CVE
+--   KEV   -- membership of CISA's Known Exploited Vulnerabilities catalog,
+--            which is confirmed real-world exploitation, not a prediction
+-- The checked_at columns are separate because the three refresh at very
+-- different rates: EPSS changes daily, NVD rarely after analysis, KEV only
+-- when CISA adds an entry.
+CREATE TABLE IF NOT EXISTS cve_scores (
+    cve_id TEXT PRIMARY KEY,
+    nvd_base_score REAL,
+    nvd_severity TEXT,
+    nvd_cvss_version TEXT,
+    nvd_vector TEXT,
+    nvd_cwes TEXT,
+    nvd_published TEXT,
+    nvd_last_modified TEXT,
+    nvd_status TEXT,
+    nvd_checked_at TEXT,
+    epss_score REAL,
+    epss_percentile REAL,
+    epss_date TEXT,
+    epss_checked_at TEXT,
+    kev_listed INTEGER NOT NULL DEFAULT 0,
+    kev_date_added TEXT,
+    kev_ransomware TEXT,
+    kev_checked_at TEXT
+);
+
+-- Which CVE a piece of coverage claims is being exploited in the wild, and
+-- where that claim came from. Article-level flags were too blunt: a monthly
+-- patch roundup mentions ninety CVEs and reports two as exploited.
+CREATE TABLE IF NOT EXISTS cve_exploit_reports (
+    cve_id TEXT NOT NULL,
+    article_id INTEGER NOT NULL REFERENCES articles(id),
+    detected_at TEXT NOT NULL,
+    PRIMARY KEY (cve_id, article_id)
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
     title, full_text, description, content='articles', content_rowid='id'
 );
@@ -175,6 +218,7 @@ _MIGRATIONS = [
     ("articles", "is_breach", "INTEGER NOT NULL DEFAULT 0"),
     ("articles", "attack_classified_at", "TEXT"),
     ("articles", "mentions_poc", "INTEGER NOT NULL DEFAULT 0"),
+    ("articles", "exploited_in_wild", "INTEGER NOT NULL DEFAULT 0"),
 ]
 
 
@@ -280,7 +324,7 @@ def insert_article(conn: sqlite3.Connection, *, source_id: int, guid: str | None
                     link: str, title: str, published_at: str | None,
                     fetched_at: str, description: str, full_text: str | None,
                     high_ticket: bool, is_breach: bool = False,
-                    mentions_poc: bool = False) -> int | None:
+                    mentions_poc: bool = False, exploited_in_wild: bool = False) -> int | None:
     """Returns the new row id, or None if this exact record already existed
     (INSERT OR IGNORE as a defensive backstop behind article_exists's own
     link+guid pre-check -- see that function's docstring)."""
@@ -288,10 +332,12 @@ def insert_article(conn: sqlite3.Connection, *, source_id: int, guid: str | None
     nlink = normalize_link(link)
     cur = conn.execute(
         "INSERT OR IGNORE INTO articles (source_id, guid, link, normalized_link, title, "
-        "published_at, fetched_at, description, full_text, content_hash, high_ticket, is_breach, mentions_poc) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "published_at, fetched_at, description, full_text, content_hash, high_ticket, is_breach, "
+        "mentions_poc, exploited_in_wild) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (source_id, guid, link, nlink, title, published_at, fetched_at,
-         description, full_text, chash, int(high_ticket), int(is_breach), int(mentions_poc)),
+         description, full_text, chash, int(high_ticket), int(is_breach), int(mentions_poc),
+         int(exploited_in_wild)),
     )
     conn.commit()
     return cur.lastrowid if cur.rowcount else None
@@ -331,6 +377,53 @@ def backfill_poc_mentions(conn: sqlite3.Connection, poc_mention_check) -> int:
             changed += 1
     conn.commit()
     return changed
+
+
+def backfill_exploited_in_wild(conn: sqlite3.Connection, evidence_fn) -> dict:
+    """Rescans stored articles for reported real-world exploitation, writing
+    both the per-CVE claims and the article-level flag.
+
+    Same shape as backfill_poc_mentions and for the same reason: this was
+    added on 22 September 2026, after thousands of real articles already
+    existed, and re-running it after tuning the pattern has to be able to
+    remove a false positive as well as add a true one -- so each article's
+    previous claims are cleared before its current ones are written."""
+    rows = conn.execute(
+        "SELECT id, title, description, full_text, exploited_in_wild FROM articles"
+    ).fetchall()
+    now = datetime.now(timezone.utc).isoformat()
+    stats = {"articles_changed": 0, "cve_reports": 0, "cves": set()}
+    for row in rows:
+        body = row["full_text"] or row["description"] or ""
+        title_claim, cve_ids = evidence_fn(row["title"], body)
+        flag = int(bool(title_claim or cve_ids))
+        conn.execute("DELETE FROM cve_exploit_reports WHERE article_id = ?", (row["id"],))
+        if cve_ids:
+            conn.executemany(
+                "INSERT OR REPLACE INTO cve_exploit_reports (cve_id, article_id, detected_at) "
+                "VALUES (?, ?, ?)",
+                [(c, row["id"], now) for c in sorted(cve_ids)],
+            )
+            stats["cve_reports"] += len(cve_ids)
+            stats["cves"].update(cve_ids)
+        if flag != row["exploited_in_wild"]:
+            conn.execute("UPDATE articles SET exploited_in_wild = ? WHERE id = ?", (flag, row["id"]))
+            stats["articles_changed"] += 1
+    conn.commit()
+    stats["distinct_cves"] = len(stats.pop("cves"))
+    return stats
+
+
+def get_exploit_reports(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, int]:
+    """How many captured articles report each of these CVEs as exploited."""
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    rows = conn.execute(
+        f"SELECT cve_id, COUNT(*) n FROM cve_exploit_reports WHERE cve_id IN ({marks}) "
+        "GROUP BY cve_id", cve_ids
+    ).fetchall()
+    return {r["cve_id"]: r["n"] for r in rows}
 
 
 def insert_cve_mentions(conn: sqlite3.Connection, article_id: int,
@@ -465,6 +558,165 @@ def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict]) ->
         (cve_id, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
+
+
+def all_cve_ids(conn: sqlite3.Connection) -> list[str]:
+    """Every distinct CVE NekoCTI has captured, newest identifier first so a
+    limited enrichment run reaches this year's CVEs before older ones."""
+    rows = conn.execute(
+        "SELECT DISTINCT cve_id FROM cve_mentions ORDER BY cve_id DESC"
+    ).fetchall()
+    return [r["cve_id"] for r in rows]
+
+
+def cves_needing_nvd(conn: sqlite3.Connection, recheck_after_days: int, limit: int) -> list[str]:
+    """CVEs to ask NVD about next, in triage order rather than database
+    order, because NVD is rate-limited (5 requests per 30s without a key,
+    50 with one) and a run is always bounded by `limit`. Order: articles
+    already flagged high ticket, then CVEs matching the vendor watchlist,
+    then anything with no severity at all, then newest first. Never-checked
+    CVEs come before re-checks; a CVE analysed by NVD rarely changes, so
+    re-checks are slow (`recheck_after_days`) and only matter for entries
+    still awaiting analysis."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=recheck_after_days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT cm.cve_id,
+               MAX(a.high_ticket) AS ht,
+               MAX(CASE WHEN vm.article_id IS NOT NULL THEN 1 ELSE 0 END) AS watched,
+               MAX(CASE WHEN cm.cvss_score IS NULL THEN 1 ELSE 0 END) AS no_score,
+               MAX(CASE WHEN cs.nvd_checked_at IS NULL THEN 1 ELSE 0 END) AS never
+        FROM cve_mentions cm
+        JOIN articles a ON a.id = cm.article_id
+        LEFT JOIN vendor_matches vm ON vm.article_id = cm.article_id
+        LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id
+        WHERE cs.nvd_checked_at IS NULL
+           OR (cs.nvd_status IS NOT NULL AND cs.nvd_status != 'Analyzed' AND cs.nvd_checked_at < ?)
+        GROUP BY cm.cve_id
+        ORDER BY never DESC, ht DESC, watched DESC, no_score DESC, cm.cve_id DESC
+        LIMIT ?
+        """,
+        (cutoff, limit),
+    ).fetchall()
+    return [r["cve_id"] for r in rows]
+
+
+def cves_needing_epss(conn: sqlite3.Connection, recheck_after_hours: int) -> list[str]:
+    """EPSS is recomputed daily by FIRST.org and comes back in batches, so
+    every captured CVE is refreshed rather than a prioritised subset."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=recheck_after_hours)).isoformat()
+    rows = conn.execute(
+        "SELECT DISTINCT cm.cve_id FROM cve_mentions cm "
+        "LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id "
+        "WHERE cs.epss_checked_at IS NULL OR cs.epss_checked_at < ? "
+        "ORDER BY cm.cve_id DESC",
+        (cutoff,),
+    ).fetchall()
+    return [r["cve_id"] for r in rows]
+
+
+def _upsert_cve_score(conn: sqlite3.Connection, cve_id: str, values: dict) -> None:
+    cols = ", ".join(values)
+    placeholders = ", ".join("?" for _ in values)
+    updates = ", ".join(f"{c} = excluded.{c}" for c in values)
+    conn.execute(
+        f"INSERT INTO cve_scores (cve_id, {cols}) VALUES (?, {placeholders}) "
+        f"ON CONFLICT(cve_id) DO UPDATE SET {updates}",
+        (cve_id, *values.values()),
+    )
+
+
+def record_nvd_score(conn: sqlite3.Connection, cve_id: str, data: dict | None) -> None:
+    """Stores what NVD says about one CVE. `data` is None when NVD genuinely
+    has no record (a reserved or withdrawn identifier): that is still a real
+    answer, so the check timestamp is written and the score columns are left
+    empty, rather than retrying it on every future run."""
+    values = {"nvd_checked_at": datetime.now(timezone.utc).isoformat()}
+    if data:
+        values.update({
+            "nvd_base_score": data.get("base_score"),
+            "nvd_severity": data.get("severity"),
+            "nvd_cvss_version": data.get("version"),
+            "nvd_vector": data.get("vector"),
+            "nvd_cwes": ", ".join(data.get("cwes", [])) or None,
+            "nvd_published": data.get("published"),
+            "nvd_last_modified": data.get("last_modified"),
+            "nvd_status": data.get("status"),
+        })
+    _upsert_cve_score(conn, cve_id, values)
+    conn.commit()
+
+
+def record_epss_scores(conn: sqlite3.Connection, scores: dict[str, dict]) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    for cve_id, s in scores.items():
+        _upsert_cve_score(conn, cve_id, {
+            "epss_score": s.get("epss"),
+            "epss_percentile": s.get("percentile"),
+            "epss_date": s.get("date"),
+            "epss_checked_at": now,
+        })
+    conn.commit()
+
+
+def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int:
+    """Marks every captured CVE present in CISA's catalog, and clears the
+    flag on any that is not, so a stale flag can't survive a catalog change.
+    Only CVEs NekoCTI has actually captured are touched."""
+    now = datetime.now(timezone.utc).isoformat()
+    marked = 0
+    for cve_id in all_cve_ids(conn):
+        entry = kev.get(cve_id)
+        _upsert_cve_score(conn, cve_id, {
+            "kev_listed": 1 if entry else 0,
+            "kev_date_added": (entry or {}).get("dateAdded"),
+            "kev_ransomware": (entry or {}).get("knownRansomwareCampaignUse"),
+            "kev_checked_at": now,
+        })
+        marked += 1 if entry else 0
+    conn.commit()
+    return marked
+
+
+def get_cve_scores(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sqlite3.Row]:
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    rows = conn.execute(
+        f"SELECT * FROM cve_scores WHERE cve_id IN ({marks})", cve_ids
+    ).fetchall()
+    return {r["cve_id"]: r for r in rows}
+
+
+def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_floor: float) -> int:
+    """Re-flags articles as high ticket using facts the ingest-time rule
+    could not see:
+      - the article reports real exploitation in the wild
+      - a CVE it mentions is in CISA KEV (confirmed exploitation)
+      - NVD's official base score is 9.0+ (most captured CVEs never had a
+        score in the article text at all)
+      - a CVE it mentions is at or above the EPSS percentile floor
+        (predicted exploitation)
+    Only ever promotes an article; it never clears a flag another rule set."""
+    cur = conn.execute(
+        """
+        UPDATE articles SET high_ticket = 1
+        WHERE high_ticket = 0 AND (
+            exploited_in_wild = 1
+            OR id IN (SELECT article_id FROM cve_exploit_reports)
+            OR id IN (
+                SELECT cm.article_id FROM cve_mentions cm
+                JOIN cve_scores cs ON cs.cve_id = cm.cve_id
+                WHERE cs.kev_listed = 1
+                   OR cs.nvd_base_score >= 9.0
+                   OR cs.epss_percentile >= ?
+            )
+        )
+        """,
+        (epss_percentile_floor,),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def get_pocs_summary(conn: sqlite3.Connection) -> list[sqlite3.Row]:

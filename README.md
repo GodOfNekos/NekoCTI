@@ -47,9 +47,48 @@ curl -sL "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master
 uv run python main.py ingest             # poll all sources once
 uv run python main.py classify           # real MITRE ATT&CK classification (local Ollama, qwen3.8:27b)
 uv run python main.py digest             # build a grouped digest, write it to the vault daily note
+uv run python main.py enrich             # per-CVE severity and exploitation facts (see below)
 uv run python server.py                  # start the dashboard at http://127.0.0.1:8778/
 ```
 
 Classification calls the local Ollama model already running on this machine - no API key, no
 hosted-provider cost. Every technique ID the model returns is validated against the real STIX
 catalog before being stored; a hallucinated ID is silently dropped, never trusted.
+
+## CVE enrichment (`enrich`)
+
+Fills in what the coverage itself rarely states, for CVEs already captured.
+Four separate signals, kept apart on purpose because they answer different
+questions:
+
+| Signal | Source | Means |
+|---|---|---|
+| Severity | NVD 2.0 | The official CVSS base score, severity, vector and CWE. Most captured CVEs have no score otherwise: only those whose article text happened to quote one. |
+| Exploited (confirmed) | CISA KEV | It is being exploited in the wild, per CISA, with the date added and whether it is used in ransomware. |
+| Exploited (reported) | our own captured articles | Coverage states this CVE is being exploited, which often lands days before a KEV entry. A CVE named in the same sentence as an exploitation phrase. |
+| Exploitation likelihood | FIRST.org EPSS | Predicted probability of exploitation in the next 30 days, and its percentile. Refreshed daily. |
+
+A public PoC (`classify-pocs`, `pocs.py`) is a fifth and different thing:
+exploit code exists, which says nothing about whether anyone is using it.
+
+```
+uv run python main.py enrich                 # everything, 200 NVD lookups max
+uv run python main.py enrich --limit 4000    # a full NVD backfill
+uv run python main.py enrich --no-nvd        # EPSS + KEV + reporting only (fast)
+uv run python main.py enrich --no-backfill   # skip re-scanning stored articles
+```
+
+**NVD is rate-limited**: 5 requests per rolling 30 seconds without an API
+key, 50 with one, and it is one request per CVE. Set `NVD_API_KEY` (free,
+from NVD) to make a full backfill take about 90 minutes instead of about 7
+hours. Everything works without it, just slower, and each run is bounded by
+`--limit` with CVEs ordered by triage priority: high ticket first, then
+watchlist matches, then anything with no severity, newest first.
+
+EPSS is batched and cheap (roughly 40 requests for 4,000 CVEs), and the KEV
+catalog is a single request, so `--no-nvd` gives a complete refresh of both
+in seconds.
+
+An article is promoted to **high ticket** when it reports exploitation, or
+mentions a CVE that is KEV-listed, scores 9.0+ at NVD, or sits at or above
+the 95th EPSS percentile. Promotion only ever adds the flag.
