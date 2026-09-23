@@ -437,9 +437,10 @@ body {
    for real, whether both genuinely fit side by side at their minimum
    readable/useful sizes - if they don't, `.reader-images` wraps onto its
    own full-width row below the text automatically, no JS breakpoint
-   logic needed for this part. The `@media (max-width: 960px)` rule further
-   below only governs whether *multiple* images inside that panel lay out
-   as a row or a column - a separate, narrower concern. */
+   logic needed for this part. Below 1024px the phone/tablet breakpoints
+   further down take over: tablets keep text and images side by side at
+   roughly 60/40, and phones stack the images after the text (Neko's call,
+   23 September 2026, replacing the old 960px stacking rule). */
 .reader-main {
   flex: 1;
   display: flex;
@@ -661,99 +662,292 @@ body {
 }
 .attack-tech.dimmed-search { display: none; }
 
-/* Mobile breakpoint. The approved comp (_mockup_pipboy.html) is
-   desktop-only - fixed 1180px device, no mobile treatment - so this is
-   built fresh against the craft floor rather than copied from a reference.
-   Two real bugs this fixes: (1) .topnav had no overflow handling at all,
-   so at narrow widths the flex row centered and silently clipped tabs off
-   both edges - since .screen and html/body both use overflow:hidden for
-   the device-bezel look, there was no scroll path to recover them, so
-   ATT&CK (a real PRODUCT.md requirement, not a placeholder) was outright
-   unreachable on a phone, not just visually cramped. Giving .topnav its
-   own overflow-x:auto creates a local scroll region that works within the
-   screen's own clip boundary. (2) .row's title/meta sat side by side with
-   no breakpoint, squeezing article titles into ~180px and wrapping them
-   into 6-8 lines while CVE/date meta stayed pinned right - fixed by
-   stacking title above meta below this width. */
-@media (max-width: 640px) {
-  .device { margin: 6px; padding: 10px; border-radius: 16px; }
-  .screen { border-radius: 6px; }
+/* Lists nested inside the ATT&CK and POCS views. These used to carry inline
+   styles, which the phone breakpoint below could not override. */
+.sublist:not([hidden]) { padding: 0 30px 20px; }
+.sublist-loose:not([hidden]) { gap: 0; }
 
-  .topnav {
-    justify-content: flex-start;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    gap: 26px;
-    padding: 40px 20px 12px;
-    margin: 0 10px;
-  }
-  .topnav .wordmark { left: 10px; }
-  .tab { font-size: 19px; flex-shrink: 0; }
+/* --- Phone and tablet navigation (see the 1023px breakpoint below) ---
+   Neko's call, 23 September 2026: below 1024px the eight-tab row becomes
+   one slim bar (where you are, plus a menu button) and a full-screen
+   section menu built from the same rows as every list. Measured before the
+   change: on a 390x664 iPhone the wrapped tabs took 303px and the list got
+   137px (21% of the screen), one article. These elements exist on desktop
+   but stay hidden there; desktop is unchanged. */
+:root { --bar-h: 56px; }
+.mobilebar, .footer-ago { display: none; }
 
-  .subnav { padding: 10px 20px 0; flex-wrap: wrap; gap: 16px; }
-  .search-bar { margin-left: 0; width: 100%; order: 10; }
-  .search-bar input { width: 100%; }
-  .list:not([hidden]), .panel, .attack-grid { padding-left: 20px; padding-right: 20px; }
+/* Icons are drawn SVG in one stroke weight, square caps to match the
+   square row bullets, never glyph stand-ins. */
+.icon-btn {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid rgba(20, 254, 23, 0.45);
+  border-radius: 2px;
+  color: var(--green);
+  cursor: pointer;
+}
+.icon-btn:hover,
+.icon-btn[aria-expanded="true"] { background: var(--green); border-color: var(--green); color: var(--bg); }
+.icon {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.25;
+  stroke-linecap: square;
+}
+.icon-btn .icon-close { display: none; }
+.icon-btn[aria-expanded="true"] .icon-menu,
+.icon-btn[aria-expanded="true"] .icon-search { display: none; }
+.icon-btn[aria-expanded="true"] .icon-close { display: block; }
+/* Compound selector on purpose: a bare .search-toggle rule ties with
+   .icon-btn's display above and loses to source order, which showed the
+   icon on desktop (caught in the 1440px regression screenshot). */
+.icon-btn.search-toggle { display: none; }
 
-  .row { flex-direction: column; align-items: flex-start; padding: 10px 14px 10px 26px; }
-  .row .title { margin-right: 0; margin-bottom: 4px; }
-  .row .meta { flex-wrap: wrap; gap: 10px; }
-
-  .reader-title { font-size: 18px; max-width: 100%; }
-  .reader-header, .reader-meta, .reader-body { padding-left: 18px; padding-right: 18px; }
-
-  .footer { flex-wrap: wrap; padding: 10px 16px; gap: 8px; font-size: 13px; }
-  .footer .gauge { width: 140px; }
+/* Menu items are real buttons wearing the row grammar: square bullet,
+   inversion for the current section. */
+button.row {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 }
 
-/* Reader image stacking - its own wider breakpoint, separate from the
-   640px phone-nav-overflow fix above, because the two problems have
-   different real thresholds: a tablet (iPad portrait is 768px, landscape
-   1024px) is plenty wide for the horizontal top nav, but not wide enough
-   to fit both a genuinely readable text column and a real image panel
-   side by side - doing the math against reader-body's own 900px
-   readability target shows the side-by-side layout only has room to work
-   with above roughly 950-1000px total width, so anything narrower than
-   that (real tablets included, not just phones) needs the stacked
-   treatment, not just phones.
+/* The one authored motion: the menu wipes down from the bar like a screen
+   redraw. clip-path only, nothing moves. */
+.nav-menu:not([hidden]) {
+  position: absolute;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: calc(var(--bar-h) + 14px) 16px 24px;
+  overflow-y: auto;
+  background: var(--bg);
+  animation: menu-wipe 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes menu-wipe {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-menu:not([hidden]) { animation: none; }
+}
 
-   The image grid uses flex-wrap with a flex-grow basis per card, not a
-   hardcoded 50/50 split, on Neko's explicit correction after the desktop
-   panel's own fixed-width bug repeated itself here: a single image would
-   otherwise only fill half the row, leaving the other half empty -
-   exactly the same "half my screen is empty" complaint, just on mobile.
-   (A first attempt used CSS Grid's `auto-fit`/`minmax`, which collapses
-   empty tracks correctly in isolation but did not reliably do so here -
-   confirmed live, a single real image still left a genuinely blank
-   second track. Flex-grow is the same proven technique already used for
-   the desktop panel fix above, verified in isolation to behave
-   correctly for this exact one-item case before trusting it here too.)
-   A single image grows to fill the whole row; two or more share it and
-   wrap onto new rows as needed - genuinely adapting to both image count
-   and real screen width, not a fixed column count. */
-@media (max-width: 960px) {
-  /* flex-wrap: nowrap is deliberate, not redundant: the base rule's own
-     `flex-wrap: wrap` (added for the desktop side-by-side safety net
-     above) combined with `flex-direction: column` here does NOT produce
-     a single vertical stack - flex wrapping happens along the cross
-     axis, which for a column-direction container is horizontal, so a
-     tall reader-body would fill the first "column line" and wrap
-     reader-images into a second column line placed beside it, not below
-     it. Confirmed live: reader-images was rendering at the same y as
-     reader-body, offset to its right, despite flex-direction correctly
-     computing as "column". */
-  .reader-main { flex-direction: column; flex-wrap: nowrap; overflow-y: auto; overflow-x: hidden; }
-  .reader-body { overflow-y: visible; max-width: 100%; }
-  .reader-images {
-    width: 100%;
-    flex: none;
-    border-left: none;
-    border-top: 1px solid rgba(20,254,23,0.25);
-    overflow-y: visible;
-    padding: 18px;
+/* Phone and tablet. One breakpoint for navigation, list shape, footer and
+   touch sizing, because all of those break together once the tab row
+   stops fitting. Everything tappable is at least 44px. */
+@media (max-width: 1023px) {
+  @supports (height: 100dvh) {
+    html, body { height: 100dvh; }
   }
+  .device { margin: 0; padding: 12px; border-radius: 16px; }
+
+  .topnav { display: none; }
+  .mobilebar {
+    position: relative;
+    z-index: 160;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: var(--bar-h);
+    padding: 6px 12px 6px 16px;
+    border-bottom: 2px solid var(--green);
+    background: var(--bg);
+  }
+  .mb-current {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: var(--green);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .mb-word { flex-shrink: 0; font-size: 12px; letter-spacing: 3px; opacity: 0.6; }
+  .mb-section {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 22px;
+    letter-spacing: 1px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-shadow: 0 0.5px 1px rgba(20, 254, 23, 0.6);
+  }
+  .mb-count { flex-shrink: 0; font-size: 13px; opacity: 0.8; }
+
+  .nav-item.row { flex-direction: row; align-items: center; justify-content: space-between; min-height: 52px; font-size: 18px; letter-spacing: 1px; }
+  .nav-item.row:not(.selected)::before,
+  .nav-item.row.selected::before { top: 50%; transform: translateY(-50%); }
+  .nav-item .meta { font-size: 14px; }
+
+  /* Range buttons stay on screen (changed often); search folds into an
+     icon and takes the row over when opened. :not([hidden]) on every
+     display rule here, since #manage-toggle and #subnav-ranges are also
+     toggled with the hidden attribute. */
+  .subnav { align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; font-size: 14px; }
+  #subnav-ranges:not([hidden]) { flex: 1 1 auto; gap: 0; }
+  .subnav .subtab:not([hidden]) {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 14px;
+    border: 1px solid rgba(20, 254, 23, 0.35);
+    white-space: nowrap;
+  }
+  #subnav-ranges .subtab { flex: 1 1 0; }
+  #subnav-ranges .subtab + .subtab { margin-left: -1px; }
+  .subnav .subtab.active { background: var(--green); border-color: var(--green); color: var(--bg); }
+  .icon-btn.search-toggle { display: inline-flex; margin-left: auto; }
+  .search-bar { display: none; }
+  .subnav.searching #subnav-ranges,
+  .subnav.searching #manage-toggle { display: none; }
+  .subnav.searching .search-bar { flex: 1; display: flex; margin: 0; }
+  .search-bar input { width: 100%; min-height: 44px; font-size: 16px; }
+  .search-clear:not([hidden]) { width: 40px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+
+  .list:not([hidden]), .panel { padding: 14px 20px 20px; }
+  .sublist:not([hidden]) { padding: 0 20px 20px; }
+
+  /* Title on its own line, CVE/vendor/date beneath: side by side, the
+     iPad rows squeezed titles into 8-10 wrapped lines. */
+  .row { flex-direction: column; align-items: flex-start; gap: 5px; padding: 12px 12px 12px 28px; }
+  .row:not(.selected)::before,
+  .row.selected::before { top: 19px; transform: none; }
+  /* Titles carry long unbreakable tokens (package paths, version ranges)
+     that overran a 360px Galaxy screen; let them break anywhere. */
+  .row .title { margin-right: 0; max-width: 100%; overflow-wrap: anywhere; }
+  .row .meta { max-width: 100%; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; overflow-wrap: anywhere; }
+
+  /* One line: status, how long since the last check, RUN CHECK. The
+     counts live in the section menu, and the full freshness line opens on
+     tap; a red square marks an awaiting-severity backlog meanwhile. */
+  .footer { gap: 10px; padding: 6px 12px; font-size: 14px; }
+  #footer-archive, #footer-highticket, .footer .gauge { display: none; }
+  .footer .gauge-wrap {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    line-height: 44px;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  .footer-ago { display: inline; opacity: 0.8; }
+  .gauge-wrap.has-warn::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 8px;
+    vertical-align: 1px;
+    background: var(--danger);
+  }
+  .footer .chip-action {
+    display: block;
+    max-width: 60%;
+    overflow: hidden;
+    padding: 0 14px;
+    line-height: 42px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .freshness { display: none; }
+  .screen.fresh-open .freshness { display: block; margin: 0; padding: 2px 16px 12px; font-size: 11px; line-height: 1.6; text-align: left; opacity: 0.75; }
+
+  /* Reader: tablet keeps text and images side by side (Neko's call), with
+     the image column at roughly 40%. min-width: 0 on the body replaces the
+     desktop 500px floor, which on a 370px phone pushed the text and the
+     CLOSE button off the right edge. */
+  .reader-header { align-items: center; gap: 12px; padding: 12px 16px; }
+  .reader-title { min-width: 0; max-width: none; font-size: 18px; overflow-wrap: anywhere; }
+  .reader-close { min-height: 44px; display: flex; align-items: center; max-width: 45%; text-align: center; }
+  .reader-meta { gap: 6px 16px; padding: 10px 16px; font-size: 13px; }
+  .reader-meta span { overflow-wrap: anywhere; }
+  .reader-main { flex-wrap: nowrap; }
+  .reader-body { flex: 3 1 0; min-width: 0; padding: 18px 20px 32px; overflow-wrap: anywhere; }
+  .reader-images { flex: 2 1 0; min-width: 220px; padding: 18px 16px 32px; }
+  .reader-source-link { min-height: 44px; display: inline-flex; align-items: center; margin: 0 16px 8px; }
+  .image-lightbox:not([hidden]) { padding: 64px 12px 12px; }
+  .image-lightbox .reader-close { top: max(12px, env(safe-area-inset-top)); right: 12px; }
+
+  .attack-search { padding: 10px 16px; }
+  .attack-search input { min-height: 44px; font-size: 16px; }
+  .attack-grid { padding: 0 16px 16px; }
+
+  .panel .add-row { flex-wrap: wrap; }
+  .panel .add-row input { flex: 1 1 200px; min-width: 0; }
+  .panel input, .panel button { min-height: 44px; font-size: 16px; }
+  .panel .term { padding: 2px 2px 2px 12px; }
+  .panel .term .remove { min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+  .entity-card { padding: 12px 14px; }
+  .entity-card .remove { padding: 8px 12px; margin: -8px -10px 0 0; }
+}
+
+/* Phone only. The device bezel gives way to the phone's own edges (safe
+   areas respected), and article images stack after the text (Neko's
+   call) instead of beside it. 599px, not 640: the household is Samsung,
+   and a Galaxy Tab S9 is exactly 640px wide in portrait, so a 640px cutoff
+   would have handed the tablet the phone layout. Galaxy phones run 360 to
+   480px. */
+@media (max-width: 599px) {
+  .device {
+    padding:
+      max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right))
+      max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .screen { border-radius: 6px; }
+
+  .mb-section { font-size: 18px; }
+  .range-prefix, .status-label { display: none; }
+  #manage-toggle:not([hidden]) { flex-basis: 100%; order: 5; }
+  .list:not([hidden]), .panel { padding: 12px 14px 18px; }
+  .sublist:not([hidden]) { padding: 0 14px 18px; }
+  .row { font-size: 16px; }
+
+  .reader-title { font-size: 17px; }
+  /* flex-wrap stays nowrap (set above): the base rule's wrap combined with
+     a column direction wraps along the horizontal cross axis, which put the
+     images beside a tall body instead of below it (found live, 16 Sept). */
+  .reader-main { flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+  .reader-body { flex: none; max-width: 100%; overflow-y: visible; padding: 16px 16px 28px; }
+  .reader-images {
+    flex: none;
+    width: 100%;
+    min-width: 0;
+    padding: 16px;
+    overflow-y: visible;
+    border-left: none;
+    border-top: 1px solid rgba(20, 254, 23, 0.25);
+  }
+  /* A single image fills the row, several share it and wrap: flex-grow,
+     not a fixed column count (grid auto-fit left a blank track, 16 Sept). */
   .reader-images-grid { flex-direction: row; flex-wrap: wrap; gap: 20px; }
-  .reader-image-card { flex: 1 1 280px; }
+  .reader-image-card { flex: 1 1 260px; }
+
+  .attack-col { flex-basis: 168px; }
+  .attack-grid { padding: 0 12px 14px; }
 }
 
 /* Exploitation signals on a CVE, added 22 September 2026. Three different

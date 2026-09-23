@@ -26,11 +26,49 @@ typography:
     fontWeight: 400
     lineHeight: 1.3
     letterSpacing: "1px"
+  title:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "22px"
+    fontWeight: 400
+    lineHeight: 1.3
+    letterSpacing: "1px"
+  title-compact:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "18px"
+    fontWeight: 400
+    lineHeight: 1.3
+    letterSpacing: "1px"
+  body-compact:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "16px"
+    fontWeight: 400
+    lineHeight: 1.5
+    letterSpacing: "normal"
+  meta:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "14px"
+    fontWeight: 400
+    lineHeight: 1.3
+    letterSpacing: "1px"
+  micro:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "12px"
+    fontWeight: 400
+    lineHeight: 1.2
+    letterSpacing: "3px"
+  fine-print:
+    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontSize: "11px"
+    fontWeight: 400
+    lineHeight: 1.6
+    letterSpacing: "0.05em"
 rounded:
   none: "0px"
   hair: "2px"
   device: "28px"
+  device-compact: "16px"
   screen: "10px"
+  screen-compact: "6px"
 spacing:
   xs: "6px"
   sm: "10px"
@@ -131,14 +169,17 @@ The screen is a fixed-height flex column that never scrolls as a page: `topnav` 
 
 List content uses a tight vertical rhythm: rows at ~9px vertical padding with a 3px gap between them, grouped under uppercase section labels. The ATT&CK matrix is the one grid layout in the system - fixed 210px columns (one per tactic) in a horizontally scrolling flex row, with sticky column headers.
 
-**Mobile breakpoint (640px, the only breakpoint in the system):**
-- The bezel margin and radius shrink (14px to 6px margin, 28px to 16px device radius).
-- `.topnav` gains its own `overflow-x: auto` and left-aligns instead of centering - fixing a real bug where narrow viewports clipped tabs (including ATT&CK, a required tab) with no scroll path, since the screen and body both clip overflow for the bezel look.
-- List rows switch from a single horizontal line (title + meta side by side) to a stacked column (title above, meta below, meta wrapping) - fixing a real collapse bug where titles were squeezed into ~6-8 wrapped lines at narrow widths while meta stayed pinned right.
-- Reader title, panel, and grid padding all step down proportionally; the footer gauge shrinks from 260px to 140px and the footer row wraps.
+**Phone and tablet (rebuilt 23 September 2026, Neko's direction).** The earlier single 640px breakpoint let the eight tabs wrap onto five lines: on a 390x664 phone the chrome took 79% of the screen and one article was visible, and the reader's leftover 500px minimum width pushed article text and the CLOSE button off the right edge. Two breakpoints now:
+
+- **1023px and below (phone and tablet):** the tab row is hidden and replaced by the **mobile bar** (wordmark, current section and its count, a menu button) and the **section menu** (see Components). Range sub-tabs become a 44px segmented control that inverts for the active range; search folds into an icon that takes the row over when opened. Rows stack title over meta, and long unbreakable tokens (package paths, version ranges) break anywhere rather than overrunning. The footer becomes one line: status, time since the last check, RUN CHECK; the archive/high-ticket chips move into the menu, and the full freshness line opens on tapping the status, with a signal-red square marking an awaiting-severity backlog while it is folded. The reader keeps text and images side by side at roughly 60/40 (Neko's call for tablets). The bezel keeps its 16px compact radius with no outer margin. Every tappable element is at least 44px, and every input is 16px so the browser never zooms on focus.
+- **599px and below (phone):** the bezel gives way to the phone's own edges, with safe-area insets respected; article images stack after the text (Neko's call); the reader title drops to the compact size. 599px rather than 640px because the household is Samsung: a Galaxy Tab S9 is exactly 640px wide in portrait and must get the tablet layout, while Galaxy phones run 360 to 480px.
+
+Verified on emulated Galaxy S24, A55, S9+ (320px), Tab S9, Tab S4 and S24 landscape, plus a 1440px desktop regression check: the content region went from 21% to 72-83% of a portrait phone's height, nothing overruns the screen edge, and desktop is unchanged. Known limit: a phone held sideways leaves the content about 45% of a 360px-high screen, one row.
 
 ### Named Rules
 **The Pinned Frame Rule.** Navigation (top) and status (bottom) never scroll away, at any viewport width. Only the named content region between them scrolls.
+
+**The Touch Floor Rule.** Below 1024px, nothing tappable is smaller than 44px in either dimension, and no text input is smaller than 16px.
 
 ## Elevation & Depth
 
@@ -157,14 +198,20 @@ Corners are close to square throughout: rows and inputs use a 2px hairline radiu
 - **Style:** horizontal row, baseline-aligned, wordmark pinned left/absolute. Six primary tabs (High Ticket, Watchlist, Breaches, APT/Entities, Campaigns, Archive) plus a standalone ATT&CK tab, each with a live count badge.
 - **Default/active:** inactive tabs sit at 0.5 opacity; the active tab is full opacity with a subtle green text-shadow and its underline broken by a background-colored gap over the shared bottom border.
 - **Sub-nav:** a secondary row directly beneath (time-range sub-tabs: 24H / 7D / All Time) using the same dim/active opacity language at smaller size; a right-aligned "MANAGE WATCHLIST" toggle appears only on tabs that support it.
-- **Mobile:** the tab row becomes independently horizontally scrollable rather than wrapping or hiding tabs.
+- **Phone and tablet:** the tab row is hidden (the `.tab` elements stay in the DOM as the single source of truth) and replaced by the mobile bar and section menu below.
+
+### Mobile Bar and Section Menu (phone and tablet)
+- **Mobile bar:** one 56px line under the screen top: dim wordmark, the current section at the 22px title size with its live count, and a 44px square menu button. A 2px phosphor rule beneath it echoes the desktop tab row's baseline.
+- **Section menu:** a full-screen list inside the screen, rebuilt from the `.tab` elements each time it opens so labels and counts cannot drift. Each section is a row (square bullet, count right-aligned) and the current one is inverted, per the Inversion Rule. Choosing one clicks its tab; the menu closes on selection, the close button, or Escape. Focus moves to the current section on open and back to the button on close.
+- **Motion:** the menu's arrival is the system's one authored motion, a 220ms `clip-path` wipe downward from the bar like a screen redraw, removed under `prefers-reduced-motion`.
+- **Icons:** drawn SVG, 2.25 stroke, square caps to match the square bullets; never glyph stand-ins. Icon buttons invert when pressed or open.
 
 ### Rows (List Items)
 - **Shape:** flat, 2px-radius, no border by default.
 - **Marker:** every row carries a small square bullet (9x9px) at the left edge - dim green when unselected, olive-black when selected (inverted along with the row).
 - **Hover:** unselected rows tint with the green-wash background; selected rows do not restate hover.
 - **Selected:** the Inversion Rule - full green background, olive-black text, meta opacity raised to 1, and a CVSS-critical value inside a selected row switches to a dark red-on-green rather than the default bright red-on-dark.
-- **Mobile:** title stacks above meta instead of sitting side-by-side.
+- **Phone and tablet:** title stacks above meta instead of sitting side by side, and the bullet aligns to the first title line.
 
 ### Cards (Entity Cards, Term Chips)
 - **Corner Style:** square-to-hairline; no fill at rest, thin green border only.

@@ -59,7 +59,10 @@ def fetch_pocs_for_cve(cve_id: str) -> list[dict] | None:
 
 def check_pocs(conn) -> dict:
     cve_ids = db.cves_needing_poc_check(conn, RECHECK_AFTER_HOURS)
-    summary = {"source": "PoC-in-GitHub enrichment", "seen": len(cve_ids), "new": 0,
+    # "new" here counts PoC repos found, not articles; "kind" marks this entry
+    # as enrichment so the dashboard's "+N NEW" total leaves it out (it read
+    # +3,507 NEW for a check that brought in 223 articles, 23 September 2026).
+    summary = {"source": "PoC-in-GitHub enrichment", "kind": "enrichment", "seen": len(cve_ids), "new": 0,
                "high_ticket": 0, "skipped_304": False}
 
     for cve_id in cve_ids:

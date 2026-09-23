@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NekoCTI</title>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -31,17 +31,43 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div class="tab" data-tab="pocs">POCS <span class="count" id="count-pocs">-</span></div>
     </div>
 
+    <!-- Phone and tablet (1023px and below) replace the eight-tab row with
+         this one slim bar: where you are, and a menu button. The tabs above
+         stay in the DOM as the single source of truth; the menu drives them.
+         Neko's call, 23 September 2026: on a phone the wrapped tab rows took
+         303px of a 664px screen and left one article visible. -->
+    <div class="mobilebar">
+      <button class="mb-current" id="mb-current" type="button" aria-controls="nav-menu" aria-expanded="false">
+        <span class="mb-word">NEKOCTI</span>
+        <span class="mb-section" id="mb-section">HIGH TICKET</span>
+        <span class="mb-count" id="mb-count"></span>
+      </button>
+      <button class="icon-btn" id="menu-btn" type="button" aria-label="Open sections menu" aria-controls="nav-menu" aria-expanded="false">
+        <svg class="icon icon-menu" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        <svg class="icon icon-close" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
+    </div>
+
+    <nav class="nav-menu" id="nav-menu" hidden aria-label="Sections">
+      <!-- populated by app.js from the .tab elements, so labels and live
+           counts can never drift from the desktop tabs -->
+    </nav>
+
     <div class="subnav">
       <span id="subnav-ranges">
-        <span class="subtab active" data-range="24h">LAST 24H</span>
-        <span class="subtab" data-range="7d">LAST 7D</span>
+        <span class="subtab active" data-range="24h"><span class="range-prefix">LAST </span>24H</span>
+        <span class="subtab" data-range="7d"><span class="range-prefix">LAST </span>7D</span>
         <span class="subtab" data-range="all">ALL TIME</span>
       </span>
       <span class="search-bar">
-        <input id="search-input" placeholder="SEARCH ARCHIVE...">
+        <input id="search-input" placeholder="SEARCH ARCHIVE..." enterkeyhint="search">
         <span class="search-clear" id="search-clear" hidden>&times;</span>
       </span>
       <span class="subtab" id="manage-toggle" hidden>MANAGE WATCHLIST</span>
+      <button class="icon-btn search-toggle" id="search-toggle" type="button" aria-label="Search the archive" aria-expanded="false">
+        <svg class="icon icon-search" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 3.5a7 7 0 1 0 0 14a7 7 0 1 0 0-14M15.5 15.5L21 21"/></svg>
+        <svg class="icon icon-close" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg>
+      </button>
     </div>
 
     <div class="list" id="list">
@@ -73,7 +99,7 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
 
     <div class="footer">
       <span class="chip" id="footer-archive">ARCHIVE -</span>
-      <span class="gauge-wrap">STATUS: <span id="footer-status">MONITORING</span><span class="gauge"><span class="gauge-fill" id="footer-gauge"></span></span></span>
+      <span class="gauge-wrap" id="footer-status-wrap"><span class="status-label">STATUS: </span><span id="footer-status">MONITORING</span><span class="footer-ago" id="footer-ago"></span><span class="gauge"><span class="gauge-fill" id="footer-gauge"></span></span></span>
       <span class="chip" id="footer-highticket">HIGH TICKET -</span>
       <span class="chip chip-action" id="run-check-btn">RUN CHECK NOW</span>
     </div>

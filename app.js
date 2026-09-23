@@ -473,7 +473,7 @@ async function openAttackTechnique(techniqueId) {
       <div class="reader-title">${data.technique_id}: ${data.technique_name}</div>
       <div class="reader-close" id="attack-back-btn">BACK TO MATRIX [x]</div>
     </div>
-    <div class="list" style="flex:1;display:flex;flex-direction:column;gap:3px;overflow-y:auto;">
+    <div class="list">
       ${rows || '<div class="empty-state">NO MATCHED ARTICLES.</div>'}
     </div>
   `;
@@ -535,7 +535,7 @@ async function renderPocsOverview() {
 
   view.innerHTML = `
     <div class="attack-search"><input id="pocs-search-input" placeholder="SEARCH CVE ID..."></div>
-    <div class="list" style="flex:1;display:flex;flex-direction:column;gap:3px;overflow-y:auto;padding:0 30px 20px;">
+    <div class="list sublist">
       ${rows || '<div class="empty-state">NO REAL POC EVIDENCE FOUND YET.</div>'}
     </div>
   `;
@@ -604,7 +604,7 @@ async function openPocDetail(cveId) {
       <div class="reader-title">${data.cve_id}</div>
       <div class="reader-close" id="pocs-back-btn">BACK TO POCS [x]</div>
     </div>
-    <div class="list" style="flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:0 30px 20px;">
+    <div class="list sublist sublist-loose">
       <div class="section-label">// PUBLIC POC REPOS (${data.pocs.length})</div>
       ${pocRows || '<div class="empty-state">NONE FOUND - MAY STILL BE DISCUSSED IN COVERAGE BELOW WITHOUT A PUBLIC REPO.</div>'}
       <div class="section-label">// MITRE ATT&CK (${data.attack_techniques.length})</div>
@@ -917,6 +917,7 @@ function clearSearch() {
   state.searchQuery = "";
   searchInput.value = "";
   searchClear.hidden = true;
+  setSearchOpen(false);
 }
 
 searchInput.addEventListener("input", () => {
@@ -980,7 +981,9 @@ function refresh() {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!document.getElementById("image-lightbox").hidden) {
+  if (!navMenu.hidden) {
+    setMenuOpen(false);
+  } else if (!document.getElementById("image-lightbox").hidden) {
     closeImageLightbox();
   } else if (!document.getElementById("reader-overlay").hidden) {
     closeReader();
@@ -1042,6 +1045,13 @@ function renderFreshness(f) {
     ` &middot; SEVERITY ${f.cves_with_severity}/${f.cves_total}` +
     ` &middot; ${f.kev_listed} KEV &middot; ${f.reported_exploited} REPORTED EXPLOITED` +
     waiting;
+
+  // Phone/tablet footer shows only the headline ("2H AGO"); the full line
+  // above opens on tap. The warn class keeps an awaiting-severity backlog
+  // visible even while the detail is folded away.
+  const agoEl = document.getElementById("footer-ago");
+  if (agoEl) agoEl.textContent = ` · ${ago(f.last_article_fetched_at).toUpperCase()}`;
+  document.getElementById("footer-status-wrap")?.classList.toggle("has-warn", Boolean(f.cves_awaiting_nvd));
 }
 
 async function refreshFreshness() {
@@ -1077,7 +1087,11 @@ async function pollIngestStatus() {
   if (status.error) {
     setRunCheckIdle("CHECK FAILED");
   } else if (status.results) {
-    const totalNew = status.results.reduce((sum, r) => sum + (r.new || 0), 0);
+    // Articles only: enrichment entries (PoC lookups) report repos found in
+    // their "new" field, which once inflated this to +3,507 for 223 articles.
+    const totalNew = status.results
+      .filter((r) => r.kind !== "enrichment")
+      .reduce((sum, r) => sum + (r.new || 0), 0);
     // The check also re-verifies the facts (see enrich.refresh_after_ingest),
     // so a run that found no new articles still did real work.
     const e = status.enrich;
@@ -1120,6 +1134,108 @@ runCheckBtn.addEventListener("click", async () => {
     // elsewhere already cover this; nothing extra needed here.
   }
 })();
+
+// --- Phone / tablet navigation (1023px and below) ---
+// Neko's call, 23 September 2026: the eight-tab row wrapped onto five lines
+// on a phone, so below 1024px CSS hides it and shows one slim bar plus a
+// menu. The .tab elements stay the single source of truth: the menu is
+// rebuilt from them each time it opens and a menu item just clicks its
+// tab, so tab switching, counts and search behave exactly as on desktop.
+
+const navMenu = document.getElementById("nav-menu");
+const menuBtn = document.getElementById("menu-btn");
+const mbCurrent = document.getElementById("mb-current");
+const screenEl = document.querySelector(".screen");
+const subnavEl = document.querySelector(".subnav");
+const searchToggle = document.getElementById("search-toggle");
+
+function tabLabel(tabEl) {
+  return tabEl.firstChild.textContent.trim();
+}
+
+function tabCount(tabEl) {
+  const c = tabEl.querySelector(".count");
+  return c && c.textContent !== "-" ? c.textContent : "";
+}
+
+function syncMobileBar() {
+  const active = document.querySelector(".topnav .tab.active");
+  if (!active) return;
+  document.getElementById("mb-section").textContent = tabLabel(active);
+  document.getElementById("mb-count").textContent = tabCount(active);
+}
+
+function buildNavMenu() {
+  const items = [...document.querySelectorAll(".topnav .tab")].map((t) => {
+    const selected = t.classList.contains("active");
+    return `<button class="row nav-item${selected ? " selected" : ""}" type="button" data-tab="${t.dataset.tab}"${selected ? ' aria-current="page"' : ""}>
+      <span class="title">${tabLabel(t)}</span><span class="meta">${tabCount(t)}</span>
+    </button>`;
+  }).join("");
+  navMenu.innerHTML = `<div class="section-label">// SECTIONS</div>${items}`;
+  navMenu.querySelectorAll(".nav-item").forEach((item) => {
+    item.addEventListener("click", () => {
+      document.querySelector(`.topnav .tab[data-tab="${item.dataset.tab}"]`).click();
+      setMenuOpen(false);
+    });
+  });
+}
+
+function setMenuOpen(open) {
+  if (open) buildNavMenu();
+  navMenu.hidden = !open;
+  screenEl.classList.toggle("menu-open", open);
+  for (const btn of [menuBtn, mbCurrent]) btn.setAttribute("aria-expanded", String(open));
+  menuBtn.setAttribute("aria-label", open ? "Close sections menu" : "Open sections menu");
+  if (open) {
+    (navMenu.querySelector(".nav-item.selected") || navMenu.querySelector(".nav-item"))?.focus();
+  } else if (navMenu.contains(document.activeElement) || document.activeElement === document.body) {
+    menuBtn.focus();
+  }
+}
+
+menuBtn.addEventListener("click", () => setMenuOpen(navMenu.hidden));
+mbCurrent.addEventListener("click", () => setMenuOpen(navMenu.hidden));
+
+// Counts arrive asynchronously and the POCS count is set by its own view,
+// so watch the tab row rather than hooking every place that writes to it.
+new MutationObserver(syncMobileBar).observe(document.querySelector(".topnav"), {
+  subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class"],
+});
+syncMobileBar();
+
+// Search folds into an icon on phone/tablet so the range buttons keep the
+// row; tapping it swaps the row over to the search field.
+function setSearchOpen(open) {
+  subnavEl.classList.toggle("searching", open);
+  searchToggle.setAttribute("aria-expanded", String(open));
+  searchToggle.setAttribute("aria-label", open ? "Close search" : "Search the archive");
+  if (open) searchInput.focus();
+}
+
+searchToggle.addEventListener("click", () => {
+  if (subnavEl.classList.contains("searching")) {
+    const hadQuery = Boolean(state.searchQuery);
+    clearSearch();
+    if (hadQuery) refresh();
+  } else {
+    setSearchOpen(true);
+  }
+});
+
+// The footer's status line opens the full freshness detail on phone/tablet.
+const statusWrap = document.getElementById("footer-status-wrap");
+statusWrap.setAttribute("role", "button");
+statusWrap.setAttribute("tabindex", "0");
+statusWrap.setAttribute("aria-controls", "freshness-line");
+function toggleFreshness() {
+  const open = screenEl.classList.toggle("fresh-open");
+  statusWrap.setAttribute("aria-expanded", String(open));
+}
+statusWrap.addEventListener("click", toggleFreshness);
+statusWrap.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleFreshness(); }
+});
 
 refresh();
 refreshFreshness();
