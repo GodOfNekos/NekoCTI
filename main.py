@@ -113,7 +113,8 @@ def _refresh_after_ingest() -> None:
     try:
         s = enrich.refresh_after_ingest(conn)
         print(f"  refreshed: EPSS {s['epss_updated']}, KEV-listed {s['kev_listed']}, "
-              f"NVD +{s['nvd_scored']}, exploitation claims {s['exploit_claims']}")
+              f"NVD +{s['nvd_scored']}, new CVE mentions {s['mentions_added']}, "
+              f"exploitation claims {s['exploit_claims']}")
     except Exception as e:
         print(f"  freshness pass failed (articles are still ingested): {e}")
     finally:
@@ -128,6 +129,10 @@ def cmd_enrich(args: argparse.Namespace) -> None:
     conn = db.connect()
     try:
         if not args.no_backfill:
+            added = db.backfill_cve_mentions(conn, extract.extract_cves, extract.is_high_ticket)
+            print(f"CVE mentions backfilled:  {added['mentions_added']} across "
+                  f"{added['articles_changed']} article(s), {added['distinct_cves']} CVE(s), "
+                  f"{added['promoted_high_ticket']} promoted to high ticket")
             stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
             print(f"In-the-wild reporting:    {stats['cve_reports']} claim(s) across "
                   f"{stats['distinct_cves']} CVE(s), {stats['articles_changed']} article flag(s) changed")

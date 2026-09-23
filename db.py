@@ -414,6 +414,53 @@ def backfill_exploited_in_wild(conn: sqlite3.Connection, evidence_fn) -> dict:
     return stats
 
 
+# Sources whose ingesters attach exactly one CVE per article on purpose
+# (kev.py, ghsa.py) and never run the text extractor, so a text re-scan must
+# leave them alone. Names must match their db.upsert_source() calls.
+STRUCTURED_SOURCES = ("CISA KEV", "GitHub Security Advisories")
+
+
+def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn, high_ticket_fn) -> dict:
+    """Re-scan stored articles with the current CVE extractor and add any
+    mention it now finds that isn't stored yet.
+
+    Added 23 September 2026 when the extractor learned typographic dashes and
+    lowercase. Unlike the flag backfills above, this only ever adds: an
+    existing mention (and its CVSS score) is never deleted or rewritten, and
+    high_ticket is only ever raised, same as refresh_high_ticket_from_scores.
+    Reads the same text ingest does (full_text, else description) and skips
+    STRUCTURED_SOURCES."""
+    existing: dict[int, set[str]] = {}
+    for row in conn.execute("SELECT article_id, cve_id FROM cve_mentions"):
+        existing.setdefault(row["article_id"], set()).add(row["cve_id"])
+    rows = conn.execute(
+        "SELECT a.id, a.description, a.full_text, a.high_ticket FROM articles a "
+        "JOIN sources s ON s.id = a.source_id "
+        f"WHERE s.name NOT IN ({', '.join('?' for _ in STRUCTURED_SOURCES)})",
+        STRUCTURED_SOURCES,
+    ).fetchall()
+    stats = {"mentions_added": 0, "articles_changed": 0, "promoted_high_ticket": 0, "cves": set()}
+    for row in rows:
+        found = extract_fn(row["full_text"] or row["description"] or "")
+        new = [(cve_id, score) for cve_id, score in found
+               if cve_id not in existing.get(row["id"], set())]
+        if not new:
+            continue
+        conn.executemany(
+            "INSERT INTO cve_mentions (article_id, cve_id, cvss_score) VALUES (?, ?, ?)",
+            [(row["id"], cve_id, score) for cve_id, score in new],
+        )
+        stats["mentions_added"] += len(new)
+        stats["articles_changed"] += 1
+        stats["cves"].update(cve_id for cve_id, _ in new)
+        if not row["high_ticket"] and high_ticket_fn(new):
+            conn.execute("UPDATE articles SET high_ticket = 1 WHERE id = ?", (row["id"],))
+            stats["promoted_high_ticket"] += 1
+    conn.commit()
+    stats["distinct_cves"] = len(stats.pop("cves"))
+    return stats
+
+
 def get_exploit_reports(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, int]:
     """How many captured articles report each of these CVEs as exploited."""
     if not cve_ids:

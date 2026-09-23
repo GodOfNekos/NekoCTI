@@ -190,8 +190,12 @@ def refresh_after_ingest(conn) -> dict:
     """
     import extract  # local import: keeps ingest's import graph unchanged
 
+    # First, so any mention the current extractor newly finds is scored and
+    # checked for exploitation reporting in this same pass.
+    mentions = db.backfill_cve_mentions(conn, extract.extract_cves, extract.is_high_ticket)
     stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
     summary = enrich(conn, nvd_limit=POST_INGEST_NVD_LIMIT)
+    summary["mentions_added"] = mentions["mentions_added"]
     summary["exploit_claims"] = stats["cve_reports"]
     summary["exploit_cves"] = stats["distinct_cves"]
     return summary

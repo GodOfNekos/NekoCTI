@@ -25,7 +25,21 @@ CAMPAIGNS_PATH = HERE / "campaigns.json"
 HIGH_TICKET_CVSS_THRESHOLD = 9.0
 
 # CVE-YYYY-NNNNN (4-7 digit sequence number, per the real format).
-CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}")
+#
+# Any common dash, any case (23 September 2026). Publishers' CMSes swap in
+# typographic dashes: a Cybereason table wrote "CVE‑2024‑40762" with
+# non-breaking hyphens (U+2011), and NVD links carry lowercase
+# "cve-2025-...". The ASCII-only, uppercase-only version missed 7 mentions
+# across 5 Prod articles, three of them KEV-listed CVEs. Every match goes
+# through normalize_cve() so the stored id is always CVE-YYYY-NNNN.
+_CVE_DASHES = "\\-\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"
+CVE_RE = re.compile(rf"CVE[{_CVE_DASHES}]\d{{4}}[{_CVE_DASHES}]\d{{4,7}}", re.IGNORECASE)
+_NON_ASCII_DASH_RE = re.compile(rf"[{_CVE_DASHES[2:]}]")
+
+
+def normalize_cve(raw: str) -> str:
+    """The canonical CVE-YYYY-NNNN form of a CVE_RE match."""
+    return _NON_ASCII_DASH_RE.sub("-", raw).upper()
 
 # Matches the real pattern confirmed against The Hacker News's own feed,
 # 16 September 2026: "CVE-2026-5430 (CVSS score: 9.8/10.0)". A couple of
@@ -57,7 +71,7 @@ def extract_cves(text: str) -> list[tuple[str, float | None]]:
     scores: dict[str, float | None] = {}
     order: list[str] = []
     for match in CVE_RE.finditer(text):
-        cve_id = match.group(0)
+        cve_id = normalize_cve(match.group(0))
         window = text[match.end(): match.end() + 60]
         cvss_match = CVSS_RE.search(window)
         score = float(cvss_match.group(1)) if cvss_match else None
@@ -356,7 +370,7 @@ def exploitation_evidence(title: str, body_text: str) -> tuple[bool, set[str]]:
     cve_ids: set[str] = set()
     for sentence in _SENTENCE_SPLIT_RE.split(text):
         if any(True for _ in _exploitation_matches(sentence)):
-            cve_ids.update(m.group(0).upper() for m in CVE_RE.finditer(sentence))
+            cve_ids.update(normalize_cve(m.group(0)) for m in CVE_RE.finditer(sentence))
     return title_claim, cve_ids
 
 
