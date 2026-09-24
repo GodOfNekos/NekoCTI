@@ -48,8 +48,14 @@ def _format_line(conn, row) -> str:
     vendor term spelled out -- a real first version of this dumped the full
     detail (one article had 55 raw CVE mentions), which was accurate but too
     long to actually glance at daily. Compacted 16 September 2026 at Neko's
-    request, after reading a real digest and judging it too verbose."""
-    bits = [f"- [{row['title']}]({row['link']})"]
+    request, after reading a real digest and judging it too verbose.
+
+    Whitespace in the title is collapsed to single spaces: some GitHub
+    advisory titles carry line breaks and deep indentation, which split the
+    markdown list item across lines in the vault note (24 September 2026).
+    The dashboard never showed it because HTML collapses whitespace itself."""
+    title = " ".join((row["title"] or "").split())
+    bits = [f"- [{title}]({row['link']})"]
 
     cves = conn.execute(
         "SELECT cve_id, cvss_score FROM cve_mentions WHERE article_id = ?",

@@ -27,6 +27,13 @@ services:
       # this can't default the way it does on bare-metal (Path.home()
       # inside the container resolves to appuser's home, not Neko's).
       - VAULT_DAILY_NOTES_PATH=/app/vault-daily-notes
+      # Local time for anything written into the vault: the digest's note
+      # filename and its heading timestamp. Without it the container ran on
+      # UTC, stamping a 7:10 AM digest "6:10 AM" and, between midnight and
+      # 1 AM in summer, targeting the previous day's note. The image already
+      # ships /usr/share/zoneinfo/Europe/London (checked 24 September 2026).
+      # Stored timestamps are timezone-aware UTC and are unaffected.
+      - TZ=Europe/London
     volumes:
       # The SQLite archive and the editable JSON configs (watchlist, tags,
       # campaigns) -- everything that needs to survive a rebuild, plus
