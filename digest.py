@@ -16,6 +16,7 @@ objects sidesteps that entirely.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -41,6 +42,11 @@ def _today_note_path() -> Path:
 
 MAX_VENDORS_SHOWN = 3
 
+# Neko's rule: no em dashes in anything written for them. Titles come from
+# feeds as published, so an em dash (U+2014) in one becomes a spaced hyphen
+# (28 September 2026, when one reached the note). The dashboard is unchanged.
+_EM_DASH = re.compile(r"\s*" + chr(0x2014) + r"\s*")
+
 
 def _format_line(conn, row) -> str:
     """One compact line per article: title, then a short CVE/vendor/entity
@@ -54,7 +60,7 @@ def _format_line(conn, row) -> str:
     advisory titles carry line breaks and deep indentation, which split the
     markdown list item across lines in the vault note (24 September 2026).
     The dashboard never showed it because HTML collapses whitespace itself."""
-    title = " ".join((row["title"] or "").split())
+    title = _EM_DASH.sub(" - ", " ".join((row["title"] or "").split()))
     bits = [f"- [{title}]({row['link']})"]
 
     cves = conn.execute(

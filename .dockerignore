@@ -30,3 +30,6 @@ _mockup_pipboy.html
 __pycache__/
 *.pyc
 *.log
+
+# Tests run on the host, not in the image (COPY *.py would pick them up).
+test_*.py
