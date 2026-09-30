@@ -1,36 +1,20 @@
-"""GitHub Security Advisories (GHSA) ingestion.
+"""GitHub Security Advisories ingestion.
 
-The real API was checked before writing this, 16 September 2026:
-`https://api.github.com/advisories` returns structured JSON, not RSS, so
-like CISA KEV it gets its own fetch/parse module rather than being forced
-through feedparser. Confirmed working unauthenticated (HTTP 200), with a
-real `published=>YYYY-MM-DD` filter and `sort=published&direction=desc`
-supported directly by the API -- so this polls incrementally by date
-rather than pulling the whole catalog every run the way KEV has to.
-
-What makes this genuinely distinct from the RSS sources: advisories carry
-real structured package/ecosystem data (`vulnerabilities[].package.{ecosystem,
-name}`) that prose articles never have, so a future filter could weight or
-surface advisories against ecosystems NekoCTI's watchlist actually cares
-about (npm, pip, actions, etc.) -- not built yet, but the data is captured
-now via vendor/entity matching against that field alongside the summary
-and description text.
-
-Unauthenticated rate limit is 60 requests/hour (real, confirmed via the
-`X-RateLimit-Limit` response header) -- fine for this poll cadence (one
-page, ~100 records, per run) but an optional `GITHUB_TOKEN` env var is
-honored if set, since GitHub's documented authenticated rate is 5000/hour.
+A JSON API, not RSS, so it has its own module like kev.py. It supports a
+published-date filter and sorting, so each run fetches one page of recent
+advisories. Unauthenticated limit is 60 requests an hour; GITHUB_TOKEN is
+honoured if set (5,000 an hour). Package and ecosystem names are matched
+against the watchlist alongside the text.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
 import db
+import enrich
 import extract
 
 GHSA_URL = "https://api.github.com/advisories"
@@ -42,14 +26,8 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
 def real_title(summary: str | None, description: str | None, fallback: str) -> str:
-    """GHSA's own `summary` field is truncated mid-word with a literal '...'
-    for many auto-imported ("unreviewed") advisories -- confirmed live, 16
-    September 2026: a real entry's `summary` ended
-    '...authorization bypass vulnerability in the GetFileContents API...'
-    while its `description` held the real complete sentence
-    ('...API endpoint that allows any authenticated user to read...').
-    Falls back to the first real sentence of `description` instead of
-    trusting a `summary` that ends in '...'."""
+    """Unreviewed advisories often have a `summary` cut off with '...'; use
+    the description's first sentence instead."""
     summary = (summary or "").strip()
     if summary and not summary.endswith("..."):
         return summary
@@ -74,29 +52,22 @@ def _headers() -> dict:
 
 
 def fetch_advisories(since: date) -> list[dict]:
-    """One page of real advisories published on/after `since`, newest
-    first. A single page (up to PER_PAGE) is enough for a daily poll
-    cadence -- deliberately not following pagination further, to stay well
-    under the unauthenticated rate limit on every run."""
+    """One page of advisories published after `since`, newest first. No
+    pagination, to stay well under the unauthenticated rate limit."""
     url = (
         f"{GHSA_URL}?published=%3E{since.isoformat()}"
         f"&per_page={PER_PAGE}&sort=published&direction=desc"
     )
-    req = urllib.request.Request(url, headers=_headers())
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return enrich.get_json(url, _headers(), REQUEST_TIMEOUT_S)
 
 
 def _normalize_timestamp(raw: str) -> str:
-    """GHSA's own timestamps are already real ISO 8601, just with a
-    trailing 'Z' instead of the '+00:00' offset the rest of this codebase
-    writes -- normalized here so string sort stays consistent everywhere."""
+    """'Z' to '+00:00', matching every other stored timestamp."""
     return raw.replace("Z", "+00:00") if raw else raw
 
 
 def _cvss_score(entry: dict) -> float | None:
-    """Prefer the newer CVSS v4 score, then v3, then the deprecated
-    top-level field -- whichever the real advisory actually populated."""
+    """CVSS v4, then v3, then the deprecated top-level field."""
     severities = entry.get("cvss_severities") or {}
     for key in ("cvss_v4", "cvss_v3"):
         score = (severities.get(key) or {}).get("score")
@@ -119,9 +90,7 @@ def ingest_ghsa(conn) -> dict:
         summary["error"] = str(e)
         return summary
 
-    watchlist = extract.load_watchlist()
-    tags = extract.load_tags()
-    campaigns = extract.load_campaigns()
+    watchlist, tags, campaigns = extract.load_filters()
 
     for entry in advisories:
         summary["seen"] += 1
@@ -149,11 +118,9 @@ def ingest_ghsa(conn) -> dict:
         text_for_matching = " ".join(filter(None, [title, body, package_text]))
 
         vendor_matches = extract.match_vendors(text_for_matching, watchlist)
-        entity_matches = extract.match_entities(text_for_matching, tags)
-        campaign_matches = extract.match_campaigns(text_for_matching, campaigns)
-        # KEV-style: for RSS sources "high ticket" comes from a CVSS score
-        # found in free text; here the API hands the score directly, plus
-        # GitHub's own reviewed severity rating as a second real signal.
+        entity_matches = extract.match_named(text_for_matching, tags)
+        campaign_matches = extract.match_named(text_for_matching, campaigns)
+        # The API gives the score directly, plus GitHub's reviewed severity.
         high_ticket = (score is not None and score >= extract.HIGH_TICKET_CVSS_THRESHOLD) \
             or severity.lower() in ("critical", "high")
         breach = extract.is_breach(title, body)

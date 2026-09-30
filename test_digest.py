@@ -3,6 +3,7 @@ nothing is written to the vault.
 
     .venv\\Scripts\\python.exe -m unittest -v test_digest
 """
+import re
 import sqlite3
 import unittest
 
@@ -23,8 +24,8 @@ def _conn():
     return conn
 
 
-def _line(title):
-    return digest._format_line(_conn(), {"id": 1, "title": title, "link": "https://example.test/a"})
+def _line(title, link="https://example.test/a"):
+    return digest._format_line(_conn(), {"id": 1, "title": title, "link": link})
 
 
 class TitleFormatting(unittest.TestCase):
@@ -41,6 +42,24 @@ class TitleFormatting(unittest.TestCase):
 
     def test_whitespace_is_still_collapsed(self):
         self.assertIn("[Advisory: path deletion in a task]", _line("Advisory:\n      path deletion\n\n  in a task"))
+
+
+class UntrustedTitles(unittest.TestCase):
+    """Feed titles land in ZAX's vault, so they must stay plain text."""
+
+    def test_markdown_and_html_in_a_title_are_escaped(self):
+        line = _line("Evil](https://x.test) [[Active Priorities]] #tag <img src=x onerror=alert(1)> `code`")
+        self.assertNotIn("](https://x.test)", line)
+        self.assertNotIn("[[", line)
+        self.assertIsNone(re.search(r"(?<!\\)[<>`#]", line.split("](https://example.test/a)")[0]))
+        self.assertIn("\\#tag", line)
+        self.assertIn("\\<img", line)
+        self.assertTrue(line.startswith("- [Evil\\]\\(https://x.test\\)"))
+
+    def test_only_http_links_are_written(self):
+        self.assertEqual(_line("Plain", "javascript:alert(1)"), "- Plain")
+        self.assertEqual(_line("Plain", ""), "- Plain")
+        self.assertEqual(_line("P", "https://x.test/a b(c)"), "- [P](https://x.test/a%20b%28c%29)")
 
 
 if __name__ == "__main__":

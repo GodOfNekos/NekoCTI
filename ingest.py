@@ -1,59 +1,33 @@
 """RSS polling and full-article fetching.
 
-The Hacker News's own feed was checked for real, 16 September 2026, before
-this was written: 50 items per pull, but every RSS `description` is a
-fixed ~390-character teaser, not article content, and there are no
-`<category>` tags at all. So for THN, the real content this pipeline
-extracts from comes from fetching each item's own article page via
-Trafilatura, not the RSS summary -- confirmed necessary, not assumed.
-
-Krebs on Security (added 16 September 2026, same research pass that found
-it) is different: its feed ships the real `content:encoded` field with
-close to full article text already in it (confirmed: ~5900 characters of
-raw HTML versus a ~430-character `description` teaser). Trafilatura can
-extract straight from that raw HTML string just as well as from a fetched
-page, so `_extract_from_entry` tries the feed's own content field first
-and only falls back to a live fetch when it's missing or too short to be
-real content -- a per-entry decision, not a per-source flag, so a future
-source that sometimes-but-not-always ships full content still gets the
-cheaper path whenever it can.
-
-Conditional fetching (etag/last-modified) avoids re-downloading an
-unchanged feed on every poll, per the real current best-practice pattern
-found in the 16 September research pass.
+Feed descriptions are often short teasers, so each item's full text comes
+from the feed's own content field when it is long enough, else from fetching
+the article page with Trafilatura. Conditional fetching (etag/last-modified)
+skips unchanged feeds.
 """
 
 from __future__ import annotations
 
 import calendar
+import ipaddress
 import re
+import socket
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import feedparser
 import trafilatura
 
 import db
 import extract
+import ghsa
+import kev
+import pocs
 
-# Schema built generic (see db.py) so more feeds slot in here later without
-# a rewrite.
-#
-# The 30 added 16 September 2026 came from a real feed-discovery pass
-# against every blog listed in muchdogesec/awesome_threat_intel_blogs --
-# that repo's own "Subscribe" links point at Obstracts' hosted web app
-# (HTML pages, not raw feeds, confirmed via a real HTTP request before
-# assuming otherwise), so each blog's OWN real feed was independently
-# discovered instead (via its HTML `<link rel="alternate">` tag, or a
-# common fallback path) and test-fetched for real reachability and
-# content richness. 134 of 191 real blogs checked had a working feed;
-# these 30 are the highest-signal subset across Analyst/Community/
-# Government/Vendor/Media categories, not just the first N that worked.
-# One real correction made before trusting a discovered URL: GitHub
-# Security Lab's homepage auto-discovered to github.blog's site-wide feed
-# (every GitHub Blog post, not just security research) -- found and
-# replaced with the real tag-scoped feed instead, confirmed via a direct
-# fetch to actually be security-only content.
+# Each blog's own feed, found and test-fetched on 16 September 2026 from
+# muchdogesec/awesome_threat_intel_blogs (134 of 191 had a working feed).
+# GitHub Security Lab uses its tag feed, not github.blog's site-wide one.
 SOURCES = {
     "The Hacker News": "https://feeds.feedburner.com/TheHackersNews",
     "Krebs on Security": "https://krebsonsecurity.com/feed/",
@@ -89,24 +63,13 @@ SOURCES = {
     "CyberScoop": "https://cyberscoop.com/feed/",
 }
 
-# Trafilatura's own fetch has no hard timeout by default; bound it so one
-# slow/unresponsive article page can't stall an entire ingest run.
 FETCH_TIMEOUT_S = 20
 
-# Below this length a feed's own content field is treated as another teaser,
-# not real article text -- worth a live fetch instead.
+# Below this length a feed's content field is another teaser: fetch the page.
 MIN_FEED_CONTENT_CHARS = 800
 
-# Confirmed real, 16 September 2026: Trafilatura's own `include_images`
-# extraction pulls genuine inline content images out of an article page --
-# tested against a real THN article about a named malware campaign and
-# found its own real illustrative graphic, not an ad or an author photo.
-# Not every extracted image will be a real technical diagram (some
-# articles' inline images are just decorative), so this captures broadly
-# and lets the dashboard's own reader show what's there rather than trying
-# to classify "diagram vs. not" automatically -- same "capture broadly,
-# filter later" philosophy already used elsewhere in this project. Capped
-# per article so one image-heavy page can't flood the reader's side panel.
+# Inline images from the article, captured broadly and shown in the reader.
+# Capped so one image-heavy page can't flood it.
 MAX_IMAGES_PER_ARTICLE = 6
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)")
 
@@ -116,15 +79,8 @@ def _now_iso() -> str:
 
 
 def normalize_published(entry) -> str | None:
-    """Real sortable UTC timestamp for an entry's publish date.
-
-    feedparser already normalizes `published_parsed` to a UTC struct_time
-    regardless of the feed's own timezone offset, so that's used instead of
-    the raw `published` string -- sorting on the raw string mixed different
-    offsets and, worse, sorted on ingestion time instead of real publish
-    time wherever `published` was missing. Falls back to the raw string
-    (then None) only when feedparser couldn't parse a date at all.
-    """
+    """A sortable UTC timestamp. feedparser's parsed struct is already UTC;
+    the raw string (then None) is the fallback when it couldn't parse one."""
     struct = entry.get("published_parsed") or entry.get("updated_parsed")
     if struct:
         dt = datetime.fromtimestamp(calendar.timegm(struct), tz=timezone.utc)
@@ -133,11 +89,8 @@ def normalize_published(entry) -> str | None:
 
 
 def _images_from_html(html: str) -> list[str]:
-    """Real inline content images from a page's raw HTML, via Trafilatura's
-    own `include_images` extraction rather than a hand-rolled HTML scrape.
-    Markdown output is used purely as a convenient carrier for the real
-    image URLs Trafilatura already found -- the markdown text itself isn't
-    otherwise used."""
+    """Inline content images, via Trafilatura's include_images extraction
+    (its Markdown output just carries the URLs)."""
     try:
         md = trafilatura.extract(html, include_images=True, output_format="markdown")
     except Exception:
@@ -151,11 +104,28 @@ def _images_from_html(html: str) -> list[str]:
     return seen[:MAX_IMAGES_PER_ARTICLE]
 
 
+def is_public_http_url(url: str, resolve=socket.getaddrinfo) -> bool:
+    """An http(s) URL whose host resolves only to public addresses. Article
+    links come from feeds, so without this a feed could point the fetcher at
+    the host (host.docker.internal), the tailnet or the dashboard itself.
+    ponytail: checks the first URL only; a redirect to a private address still
+    gets through. Pin the resolved address per request if that ever matters."""
+    parts = urlparse(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        infos = resolve(parts.hostname, parts.port or 443, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return False
+    addrs = {ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos}
+    return bool(addrs) and all(a.is_global for a in addrs)
+
+
 def fetch_full_text(url: str) -> tuple[str | None, list[str]]:
-    """Best-effort full-article fetch: text and any real inline images
-    together, from the same single page fetch. Returns (None, []) on any
-    failure rather than raising -- a single bad article page must never
-    stop the run."""
+    """Text and images from one page fetch; (None, []) on any failure, so one
+    bad page never stops the run."""
+    if not is_public_http_url(url):
+        return None, []
     try:
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
@@ -166,11 +136,7 @@ def fetch_full_text(url: str) -> tuple[str | None, list[str]]:
 
 
 def _extract_from_entry(entry, link: str) -> tuple[str | None, list[str]]:
-    """Full article text and real inline images for one entry, cheapest
-    real option first: the feed's own `content:encoded` field (via
-    Trafilatura, which works on a raw HTML string just as well as a
-    fetched page) if it's long enough to be real content, else a live
-    fetch of the article page."""
+    """The feed's own content field if it's long enough, else a page fetch."""
     feed_content = entry.get("content")
     if feed_content:
         html = feed_content[0].get("value", "")
@@ -184,8 +150,7 @@ def _extract_from_entry(entry, link: str) -> tuple[str | None, list[str]]:
 
 
 def ingest_source(conn, name: str, feed_url: str) -> dict:
-    """Poll one source, fetch/extract each new item, store it. Returns a
-    small summary dict for the caller to report on."""
+    """Poll one source, fetch and extract each new item, store it."""
     source_id = db.upsert_source(conn, name, feed_url)
 
     row = conn.execute(
@@ -202,9 +167,7 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
         db.update_source_polled(conn, source_id, prior_etag, prior_modified, _now_iso())
         return summary
 
-    watchlist = extract.load_watchlist()
-    tags = extract.load_tags()
-    campaigns = extract.load_campaigns()
+    watchlist, tags, campaigns = extract.load_filters()
 
     for entry in parsed.entries:
         summary["seen"] += 1
@@ -216,9 +179,7 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
         published_at = normalize_published(entry)
 
         nlink = db.normalize_link(link)
-        # Checked on link+guid alone, before paying for a full-article fetch
-        # -- see article_exists's own docstring for why content_hash can't
-        # be part of this pre-check.
+        # Checked before paying for a full-article fetch (see article_exists).
         if db.article_exists(conn, nlink, guid):
             continue
 
@@ -227,8 +188,8 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
 
         cve_mentions = extract.extract_cves(text_for_extraction)
         vendor_matches = extract.match_vendors(text_for_extraction, watchlist)
-        entity_matches = extract.match_entities(text_for_extraction, tags)
-        campaign_matches = extract.match_campaigns(text_for_extraction, campaigns)
+        entity_matches = extract.match_named(text_for_extraction, tags)
+        campaign_matches = extract.match_named(text_for_extraction, campaigns)
         high_ticket = extract.is_high_ticket(cve_mentions)
         breach = extract.is_breach(title, text_for_extraction)
         poc_mentioned = extract.mentions_poc(title, text_for_extraction)
@@ -250,9 +211,7 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
             exploited_in_wild=exploited,
         )
         if article_id is None:
-            # The link+guid pre-check above should have already caught this;
-            # this is only the defensive backstop firing, not the normal path.
-            continue
+            continue   # the defensive backstop behind the pre-check
 
         if cve_mentions:
             db.insert_cve_mentions(conn, article_id, cve_mentions)
@@ -277,24 +236,8 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
 
 
 def run_all() -> list[dict]:
-    """Poll every RSS source, then CISA KEV and GitHub Security Advisories,
-    then check real PoC availability for any CVE captured along the way.
-
-    Neither KEV nor GHSA is RSS -- both are structured JSON APIs with their
-    own fetch/parse shape (see kev.py and ghsa.py's own module docstrings)
-    -- so they each get their own ingestion function rather than being
-    forced through feedparser. The `sources` table still records them the
-    same generic way as any RSS source; only the Python-level fetch logic
-    differs.
-
-    PoC checking (pocs.py) runs last and is a different shape again: an
-    enrichment lookup against CVEs already captured above, not a source
-    of its own new articles -- see pocs.py's own module docstring for why.
-    """
-    import ghsa
-    import kev
-    import pocs
-
+    """Every RSS source, then CISA KEV and GitHub Security Advisories (JSON
+    APIs with their own modules), then PoC availability for the CVEs found."""
     db.init_db()
     conn = db.connect()
     try:

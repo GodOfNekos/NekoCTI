@@ -1,8 +1,5 @@
-/* NekoCTI - Pip-Boy Personal Monitor direction.
-   Verified against a real Fallout 4 Pip-Boy CSS recreation
-   (AviralMehrotra/Fallout4-Pip-Boy) before writing this, 16 September 2026 -
-   see PRODUCT.md's Brand Commitments for the full list of corrections that
-   resulted. Font and color pair are the real convention, not invented. */
+/* NekoCTI - Pip-Boy Personal Monitor. Font and colour pair from a Fallout 4
+   Pip-Boy CSS recreation (AviralMehrotra/Fallout4-Pip-Boy); see DESIGN.md. */
 
 @font-face {
   font-family: "PipBoy";
@@ -19,11 +16,7 @@
 
 * { box-sizing: border-box; }
 
-/* Interaction states the craft floor requires but nothing else in this
-   file provided - without these, tabs/rows/inputs fall back to the
-   browser's default blue focus ring and system scrollbar, breaking the
-   phosphor-green world at the exact moments a real device (keyboard nav,
-   text selection, an overflowing list) touches them. */
+/* Selection, focus and scrollbars in the phosphor palette, not browser blue. */
 ::selection {
   background: var(--green);
   color: var(--bg);
@@ -52,10 +45,7 @@ body {
   font-family: 'PipBoy', 'Courier New', monospace;
 }
 
-/* Fills the real window instead of sitting in a fixed 1180x800 box - the
-   original mockup's device-frame sizing left a large unused black margin
-   on anything wider than that, found by Neko actually using it. Small
-   fixed margin keeps a hint of the "device bezel" without wasting space. */
+/* Fills the window, with a small margin as the device bezel. */
 .device {
   width: 100%;
   height: 100%;
@@ -234,11 +224,8 @@ body {
 .poc-cve-desc { opacity: 0.75; font-size: 13px; font-weight: normal; margin-top: 4px; }
 .poc-cve-vendors { opacity: 0.55; font-size: 11px; font-weight: normal; letter-spacing: 0.04em; text-transform: uppercase; margin-top: 2px; }
 
-/* Real per-CVE MITRE ATT&CK tags, two honest confidence tiers (see
-   cve_attack.py): "expert" is MITRE's own cited analysis, shown as a
-   solid inverted pill matching the app's one real accent color; "llm" is
-   NekoCTI's own best-guess classification, shown as a dimmed outline of
-   the same shape so it never reads as equally authoritative. */
+/* Per-CVE ATT&CK tags in two tiers (cve_attack.py): "expert" is MITRE's cited
+   mapping, a solid pill; "llm" is a best guess, a dimmed outline. */
 .poc-attack-tags { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
 .attack-tag {
   display: inline-block;
@@ -334,6 +321,7 @@ body {
 .entity-card .entity-name { font-size: 17px; margin-bottom: 4px; }
 .entity-card .entity-aliases { opacity: 0.7; font-size: 13px; }
 .entity-card .remove:hover { color: var(--bg); background: var(--green); }
+.remove-right { float: right; cursor: pointer; }
 
 .footer {
   display: flex;
@@ -380,13 +368,9 @@ body {
 /* Reading view - real full-article content shown in-dashboard, not a
    forward to the original site. Neko's explicit request: this is meant
    to be the central place for consumption, not a launchpad. */
-/* :not([hidden]) rather than a bare selector - a bare `display: flex` here
-   has equal specificity to the browser's own `[hidden] { display: none }`
-   rule and, being declared later, would win and render the overlay
-   visible-but-empty over the whole screen even while `hidden` is set. The
-   exact same bug class already hit once before in this environment
-   (Voice Visualizer, 30 August 2026) - checked for it here rather than
-   repeating it. */
+/* :not([hidden]) everywhere a panel sets display: a bare display value has
+   the same specificity as the browser's [hidden] rule and, coming later,
+   would win, showing the overlay while hidden is set. */
 .reader-overlay:not([hidden]) {
   position: absolute;
   inset: 0;
@@ -421,26 +405,8 @@ body {
   opacity: 0.85;
   border-bottom: 1px solid rgba(20,254,23,0.25);
 }
-/* Holds .reader-body and, when the source article carried real inline
-   images, .reader-images side by side - fills the width that used to sit
-   empty on wide screens for a text-only article.
-
-   `flex-wrap: wrap` here is deliberate, not decorative: a real bug was
-   found and fixed, 16 September 2026, right at the boundary between the
-   side-by-side and stacked layouts - at 1024px (a genuinely common
-   tablet-landscape/small-laptop width), the two children's flex-basis
-   values summed to less than the container, so the browser distributed
-   only the small remainder between them, leaving reader-body squeezed to
-   a measured 288px, far below anything readable, while `.reader-images`
-   still got most of the room. Giving each child a real `min-width` plus
-   `flex-wrap: wrap` on the container means the browser itself decides,
-   for real, whether both genuinely fit side by side at their minimum
-   readable/useful sizes - if they don't, `.reader-images` wraps onto its
-   own full-width row below the text automatically, no JS breakpoint
-   logic needed for this part. Below 1024px the phone/tablet breakpoints
-   further down take over: tablets keep text and images side by side at
-   roughly 60/40, and phones stack the images after the text (Neko's call,
-   23 September 2026, replacing the old 960px stacking rule). */
+/* Body and images side by side, wrapping below each other's minimum widths.
+   Below 1024px the phone and tablet breakpoints take over. */
 .reader-main {
   flex: 1;
   display: flex;
@@ -456,17 +422,10 @@ body {
   line-height: 1.7;
   white-space: pre-wrap;
 }
-/* The 900px readability cap only makes sense when .reader-images sits
-   beside it splitting the screen. A text/table-only article (no real
-   inline images extracted) has no sibling to share space with, so it
-   should genuinely fill the screen instead of leaving the rest empty --
-   Neko's explicit call, same reasoning as the image panel's own fix. */
+/* The 900px reading cap only applies when images sit beside the text. */
 .reader-body:not(:only-child) { max-width: 900px; }
 
-/* Real markdown pipe-tables from source articles (ZDI's monthly patch
-   roundups among them) rendered as actual table markup instead of raw
-   escaped text, so wide Yes/No matrices stay legible against their own
-   real column headers. */
+/* Markdown pipe-tables from article text, rendered as real tables. */
 .reader-table-caption {
   opacity: 0.65;
   font-size: 13px;
@@ -501,24 +460,9 @@ body {
 .reader-table td.cell-yes { color: #14fe17; font-weight: 600; }
 .reader-table td.cell-no { opacity: 0.35; }
 
-/* Real inline images from the source article, recolored toward the
-   phosphor palette via a CSS filter - the diagram's actual content is
-   never regenerated or reinterpreted, only its color treatment, so a
-   real attack-flow diagram stays factually accurate. Hover reveals the
-   true, unfiltered original at thumbnail size; clicking opens a full
-   zoomed real-color view (#image-lightbox) for actually reading fine
-   diagram detail.
-
-   A real bug found and fixed, 16 September 2026: a fixed 460px width
-   left a genuinely dead strip of empty screen on a wide primary monitor
-   (measured directly against the real live site at 1920px: reader-body
-   correctly stopped at its own 900px readability cap, but reader-images
-   never grew to claim the ~480px that left unclaimed, since a fixed
-   width can't respond to real available space). Fixed with a real flex
-   basis (`flex: 1 1 460px`, no max-width ceiling) so the panel actually
-   expands to claim whatever real space is left on the screen, on Neko's
-   explicit call to genuinely fill it rather than cap it at a "safe"
-   width. */
+/* Article images recoloured toward the palette by a filter, never altered;
+   hover shows the original, click opens the true-colour zoom. The panel
+   grows into whatever width is left. */
 .reader-images {
   flex: 1 1 460px;
   min-width: 400px;
@@ -530,10 +474,8 @@ body {
   gap: 20px;
 }
 .reader-images .section-label { margin: 0; }
-/* Holds just the image cards, kept separate from the section label above
-   it so the label always stays its own full-width heading, never a flex
-   sibling sharing row space with the cards (see the mobile/tablet
-   breakpoint below for why that separation matters). */
+/* The cards, kept apart from the section label so the label stays a
+   full-width heading. */
 .reader-images-grid { display: flex; flex-direction: column; gap: 26px; }
 .reader-image-card { display: flex; flex-direction: column; gap: 8px; }
 .reader-image-index { font-size: 12px; opacity: 0.5; letter-spacing: 1px; }
@@ -555,12 +497,7 @@ body {
 }
 .reader-image-original:hover { opacity: 1; text-decoration: underline; }
 
-/* Full-size real-color zoom view - the whole point of zooming in is
-   reading fine detail on a real diagram, so this always shows true
-   colors, never the themed filter. Click again (or the close button /
-   Escape) to close; click-and-drag isn't needed since native image
-   scroll inside the overlay already lets a genuinely oversized diagram
-   be panned. */
+/* Full-size true-colour zoom for reading diagram detail. */
 .image-lightbox:not([hidden]) {
   position: absolute;
   inset: 0;
@@ -668,12 +605,8 @@ body {
 .sublist-loose:not([hidden]) { gap: 0; }
 
 /* --- Phone and tablet navigation (see the 1023px breakpoint below) ---
-   Neko's call, 23 September 2026: below 1024px the eight-tab row becomes
-   one slim bar (where you are, plus a menu button) and a full-screen
-   section menu built from the same rows as every list. Measured before the
-   change: on a 390x664 iPhone the wrapped tabs took 303px and the list got
-   137px (21% of the screen), one article. These elements exist on desktop
-   but stay hidden there; desktop is unchanged. */
+   Below 1024px the tab row becomes one slim bar plus a full-screen section
+   menu built from the tab elements. Hidden on desktop. */
 :root { --bar-h: 56px; }
 .mobilebar, .footer-ago { display: none; }
 
@@ -798,10 +731,8 @@ button.row {
   .nav-item.row.selected::before { top: 50%; transform: translateY(-50%); }
   .nav-item .meta { font-size: 14px; }
 
-  /* Range buttons stay on screen (changed often); search folds into an
-     icon and takes the row over when opened. :not([hidden]) on every
-     display rule here, since #manage-toggle and #subnav-ranges are also
-     toggled with the hidden attribute. */
+  /* Range buttons stay; search folds into an icon and takes the row when
+   opened. :not([hidden]) because these are toggled with hidden. */
   .subnav { align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 12px; font-size: 14px; }
   #subnav-ranges:not([hidden]) { flex: 1 1 auto; gap: 0; }
   .subnav .subtab:not([hidden]) {
@@ -874,10 +805,9 @@ button.row {
   .freshness { display: none; }
   .screen.fresh-open .freshness { display: block; margin: 0; padding: 2px 16px 12px; font-size: 11px; line-height: 1.6; text-align: left; opacity: 0.75; }
 
-  /* Reader: tablet keeps text and images side by side (Neko's call), with
-     the image column at roughly 40%. min-width: 0 on the body replaces the
-     desktop 500px floor, which on a 370px phone pushed the text and the
-     CLOSE button off the right edge. */
+  /* Reader: tablet keeps text and images side by side (about 60/40). The
+   body's min-width: 0 replaces the desktop 500px floor, which pushed text
+   off a phone screen. */
   .reader-header { align-items: center; gap: 12px; padding: 12px 16px; }
   .reader-title { min-width: 0; max-width: none; font-size: 18px; overflow-wrap: anywhere; }
   .reader-close { min-height: 44px; display: flex; align-items: center; max-width: 45%; text-align: center; }
@@ -903,12 +833,9 @@ button.row {
   .entity-card .remove { padding: 8px 12px; margin: -8px -10px 0 0; }
 }
 
-/* Phone only. The device bezel gives way to the phone's own edges (safe
-   areas respected), and article images stack after the text (Neko's
-   call) instead of beside it. 599px, not 640: the household is Samsung,
-   and a Galaxy Tab S9 is exactly 640px wide in portrait, so a 640px cutoff
-   would have handed the tablet the phone layout. Galaxy phones run 360 to
-   480px. */
+/* Phone only: the bezel gives way to the phone's edges (safe areas
+   respected) and images stack after the text. 599px, not 640, because a
+   Galaxy Tab S9 is 640px wide in portrait and gets the tablet layout. */
 @media (max-width: 599px) {
   .device {
     padding:
@@ -950,18 +877,10 @@ button.row {
   .attack-grid { padding: 0 12px 14px; }
 }
 
-/* Exploitation signals on a CVE, added 22 September 2026. Three different
-   claims, deliberately styled apart rather than merged into one "risk"
-   badge, because they answer different questions:
-     KEV   - CISA confirms real-world exploitation. Strongest, so it gets
-             the danger colour as a solid pill.
-     WILD  - our own captured coverage reports exploitation, which usually
-             lands before a KEV entry does. Outlined, not solid: it is
-             reporting, not an authority's confirmation.
-     EPSS  - FIRST.org's predicted probability, shown only at the 95th
-             percentile and above. Dimmest: a forecast, not an observation.
-   A public PoC (poc-* classes above) is a fourth, separate thing: exploit
-   code exists, which says nothing about whether anyone is using it. */
+/* Exploitation signals, styled apart because they answer different
+   questions: KEV is CISA confirming use (solid danger pill), WILD is our
+   coverage reporting it (outlined), EPSS is a forecast (dimmest). A public
+   PoC is a fourth thing: code exists, which says nothing about use. */
 .tag-kev, .tag-wild, .tag-epss {
   font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
   padding: 1px 5px; border-radius: 2px; margin-left: 4px; white-space: nowrap;

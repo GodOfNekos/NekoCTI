@@ -22,9 +22,6 @@ ctid-kev-attack-mapping.json
 # Impeccable's own tool-internal metadata -- not part of the shipped app.
 .impeccable/
 
-# Dev-only reference file, not loaded by the live app.
-_mockup_pipboy.html
-
 # Old/local-only, never needed to build the image
 .venv/
 __pycache__/

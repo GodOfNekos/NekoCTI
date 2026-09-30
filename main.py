@@ -18,12 +18,11 @@ import sys
 
 import db
 import digest as digest_mod
+import enrich
+import extract
 import ingest
 
-# Windows' console defaults to cp1252, which can't encode real characters
-# that show up in scraped article titles (emoji, smart quotes, etc.) --
-# the same UnicodeEncodeError class already hit elsewhere in this
-# ecosystem. Reconfigure to UTF-8 up front rather than catching it per print.
+# Windows' console is cp1252, which can't print emoji or smart quotes from titles.
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
@@ -107,8 +106,6 @@ def cmd_archive(args: argparse.Namespace) -> None:
 def _refresh_after_ingest() -> None:
     """Same freshness pass the dashboard's check button runs, so the CLI and
     the button behave identically. Never allowed to fail the ingest."""
-    import enrich
-
     conn = db.connect()
     try:
         s = enrich.refresh_after_ingest(conn)
@@ -122,9 +119,6 @@ def _refresh_after_ingest() -> None:
 
 
 def cmd_enrich(args: argparse.Namespace) -> None:
-    import enrich
-    import extract
-
     db.init_db()
     conn = db.connect()
     try:
@@ -156,7 +150,7 @@ def cmd_enrich(args: argparse.Namespace) -> None:
 
 
 def cmd_classify(args: argparse.Namespace) -> None:
-    import attack
+    import attack  # here, not at the top: loading mitreattack slows every other command
 
     db.init_db()
     conn = db.connect()

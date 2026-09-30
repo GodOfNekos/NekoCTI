@@ -7,14 +7,7 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<!--
-THESIS: A personal monitoring device checked routinely, not a dashboard visited once - refuses the generic SIEM-console default this category always ships.
-OWN-WORLD: Fallout's Pip-Boy, verified against a real Fallout 4 recreation - #14fe17 phosphor green on #272b23 olive-black, Monofonto, horizontal opacity-dimmed tabs, inverted-selection list rows, persistent bottom status footer.
-STORY: Neko opens it, scans High Ticket first, switches tabs to Watchlist/Entities/Archive, manages his own vendor watchlist and tracked entities directly from the screen.
-FIRST VIEWPORT: top tab bar (wordmark left, four tabs with live counts), a time-range sub-tab row, a scrolling list of rows grouped by section label, a persistent footer with archive/status/high-ticket chips.
-FORM: Pip-Boy Personal Monitor - user-pinned direction, verified against AviralMehrotra/Fallout4-Pip-Boy; seed key f050ac3d (direction-round candidate 1 of 7, dice-assigned candidate was 3).
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
--->
+<!-- Design direction and rules: DESIGN.md. -->
 
 <div class="device">
   <div class="screen">
@@ -31,11 +24,8 @@ FINISH: unreviewed and undocumented is unfinished; this build ends with the fini
       <div class="tab" data-tab="pocs">POCS <span class="count" id="count-pocs">-</span></div>
     </div>
 
-    <!-- Phone and tablet (1023px and below) replace the eight-tab row with
-         this one slim bar: where you are, and a menu button. The tabs above
-         stay in the DOM as the single source of truth; the menu drives them.
-         Neko's call, 23 September 2026: on a phone the wrapped tab rows took
-         303px of a 664px screen and left one article visible. -->
+    <!-- Phone and tablet (1023px and below): this bar and a menu replace the
+         tab row. The tabs above stay the source of truth; the menu drives them. -->
     <div class="mobilebar">
       <button class="mb-current" id="mb-current" type="button" aria-controls="nav-menu" aria-expanded="false">
         <span class="mb-word">NEKOCTI</span>

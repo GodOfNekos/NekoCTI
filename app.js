@@ -1,4 +1,9 @@
 // NekoCTI dashboard - vanilla JS, no framework or build step.
+//
+// Everything shown comes from feeds, advisories and user-edited lists, so
+// every value that goes into HTML passes through esc(), and every link or
+// image through safeUrl(). The server's Content-Security-Policy is the
+// backstop, not the plan.
 
 const state = {
   tab: "high_ticket",
@@ -17,35 +22,50 @@ const TAB_LABELS = {
   archive: "FULL ARCHIVE",
 };
 
+const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ESCAPES[c]);
+const safeUrl = (url) => (/^https?:\/\//i.test(url || "") ? esc(url) : "");
+
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   return res.json();
 }
 
-function errorHTML(err) {
-  return `<div class="empty-state error-state">SIGNAL LOST - COULD NOT REACH NEKOCTI BACKEND.<br>${escapeHtml(String(err.message || err))}</div>`;
+// Every write carries the header the server requires (see server.py).
+function writeJSON(url, method, body) {
+  return fetchJSON(url, {
+    method,
+    headers: { "X-NekoCTI": "1", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
 }
 
-// The severity to show for a CVE: NVD's official base score when enrichment
-// has fetched it, otherwise whatever the article's own text claimed. NVD
-// wins because the article figure is often the vendor's own, or absent.
+function errorHTML(err) {
+  return `<div class="empty-state error-state">SIGNAL LOST - COULD NOT REACH NEKOCTI BACKEND.<br>${esc(err.message || err)}</div>`;
+}
+
+// Show one content region and hide the others and the reader.
+const VIEWS = ["list", "manage-panel", "attack-view", "pocs-view"];
+function showView(id) {
+  for (const v of VIEWS) document.getElementById(v).hidden = v !== id;
+  closeReader();
+  return document.getElementById(id);
+}
+
+// NVD's official score when enrichment has it, else the article's own claim.
 function cveScore(c) {
   return c.nvd_cvss !== null && c.nvd_cvss !== undefined ? c.nvd_cvss : c.cvss;
 }
 
-// Exploitation, shortest first: KEV is CISA confirming real-world use, an
-// exploit report is our own captured coverage saying so (which often comes
-// first), and EPSS is a prediction. Deliberately distinct from "a PoC
-// exists", which says only that code is public.
+// KEV is CISA confirming use, an exploit report is our own coverage saying
+// so, EPSS is a prediction. Distinct from "a PoC exists".
 function exploitTags(c) {
   const tags = [];
   if (c.kev) tags.push(`<span class="tag-kev">KEV${c.kev_ransomware === "Known" ? " RANSOMWARE" : ""}</span>`);
   else if (c.exploit_reports) tags.push(`<span class="tag-wild">EXPLOITED REPORTED</span>`);
   if (c.epss_percentile !== null && c.epss_percentile !== undefined && c.epss_percentile >= 0.95) {
-    // EPSS is recalculated daily; an old figure is flagged rather than
-    // trusted silently, and the next check refreshes it.
-    const stale = c.epss_stale ? ` <span class="tag-stale" title="EPSS from ${c.epss_date}, refreshed on the next check">STALE</span>` : "";
+    const stale = c.epss_stale ? ` <span class="tag-stale" title="EPSS from ${esc(c.epss_date)}, refreshed on the next check">STALE</span>` : "";
     tags.push(`<span class="tag-epss">EPSS ${(c.epss_percentile * 100).toFixed(0)}th</span>${stale}`);
   }
   return tags.join(" ");
@@ -56,12 +76,12 @@ function formatMeta(article) {
   if (article.cves.length === 1) {
     const c = article.cves[0];
     const score = cveScore(c);
-    const label = score ? `<span class="${score >= 9 ? 'cve-crit' : ''}">${c.id} (${score})</span>` : c.id;
+    const label = score ? `<span class="${score >= 9 ? "cve-crit" : ""}">${esc(c.id)} (${esc(score)})</span>` : esc(c.id);
     bits.push([label, exploitTags(c)].filter(Boolean).join(" "));
   } else if (article.cves.length > 1) {
     const scores = article.cves.map(cveScore).filter((s) => s !== null && s !== undefined);
     let note = `${article.cves.length} CVEs`;
-    if (scores.length) note += `, highest ${Math.max(...scores)}`;
+    if (scores.length) note += `, highest ${esc(Math.max(...scores))}`;
     const kev = article.cves.filter((c) => c.kev).length;
     const wild = article.cves.filter((c) => !c.kev && c.exploit_reports).length;
     if (kev) note += ` <span class="tag-kev">${kev} KEV</span>`;
@@ -69,44 +89,28 @@ function formatMeta(article) {
     bits.push(note);
   }
   if (article.vendors.length) {
-    const shown = article.vendors.slice(0, 3).join(", ");
+    const shown = article.vendors.slice(0, 3).map(esc).join(", ");
     const extra = article.vendors.length > 3 ? ` +${article.vendors.length - 3} more` : "";
     bits.push(shown + extra);
   }
-  if (article.entities.length) {
-    bits.push(article.entities.join(", "));
-  }
-  if (article.campaigns && article.campaigns.length) {
-    bits.push(article.campaigns.join(", "));
-  }
-  bits.push(article.published_at || "");
+  if (article.entities.length) bits.push(article.entities.map(esc).join(", "));
+  if (article.campaigns && article.campaigns.length) bits.push(article.campaigns.map(esc).join(", "));
+  bits.push(esc(article.published_at));
   return bits.filter(Boolean).map((b) => `<span>${b}</span>`).join("");
 }
 
-function renderList(articles) {
-  const list = document.getElementById("list");
-  list.hidden = false;
-  document.getElementById("manage-panel").hidden = true;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
-  closeReader();
-
-  if (!articles.length) {
-    list.innerHTML = `<div class="empty-state">NOTHING CAPTURED YET IN THIS RANGE.</div>`;
-    return;
-  }
-
-  const label = TAB_LABELS[state.tab] || "";
-  const rows = articles.map((a) => `
-    <div class="row ${a.id === state.selectedId ? "selected" : ""}" data-id="${a.id}" data-link="${a.link}">
-      <span class="title">${a.title}</span>
+// The one article-row template, and its click-through to the reader.
+function articleRows(articles, { pocFlag = false } = {}) {
+  return articles.map((a) => `
+    <div class="row ${a.id === state.selectedId ? "selected" : ""}" data-id="${esc(a.id)}">
+      <span class="title">${pocFlag && a.mentions_poc ? '<span class="poc-mention-flag">[POC DISCUSSED]</span> ' : ""}${esc(a.title)}</span>
       <span class="meta">${formatMeta(a)}</span>
     </div>
   `).join("");
+}
 
-  list.innerHTML = `<div class="section-label">// ${label}</div>${rows}`;
-
-  list.querySelectorAll(".row").forEach((el) => {
+function wireRows(container) {
+  container.querySelectorAll(".row[data-id]").forEach((el) => {
     el.addEventListener("click", () => {
       state.selectedId = Number(el.dataset.id);
       openReader(state.selectedId);
@@ -114,30 +118,37 @@ function renderList(articles) {
   });
 }
 
+function readerHeader(title, closeId, closeLabel) {
+  return `<div class="reader-header">
+      <div class="reader-title">${esc(title)}</div>
+      <div class="reader-close" id="${closeId}">${closeLabel} [x]</div>
+    </div>`;
+}
+
+function renderList(articles) {
+  const list = showView("list");
+  if (!articles.length) {
+    list.innerHTML = `<div class="empty-state">NOTHING CAPTURED YET IN THIS RANGE.</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="section-label">// ${TAB_LABELS[state.tab] || ""}</div>${articleRows(articles)}`;
+  wireRows(list);
+}
+
 async function loadArticles() {
   try {
-    const data = await fetchJSON(`/api/articles?tab=${state.tab}&range=${state.range}`);
+    const data = await fetchJSON(`/api/articles?tab=${encodeURIComponent(state.tab)}&range=${encodeURIComponent(state.range)}`);
     renderList(data.articles);
     updateCounts(data.counts);
   } catch (err) {
-    document.getElementById("list").hidden = false;
-    document.getElementById("list").innerHTML = errorHTML(err);
+    showView("list").innerHTML = errorHTML(err);
   }
 }
 
-// --- Search ---
-// Real full-text search across the whole archive (SQLite FTS5 on the
-// backend), independent of whichever tab happens to be active - Neko's
-// explicit request for "search for specific things when I need to".
-// Ranked by relevance, not date, unlike every other view in this app.
+// --- Search: FTS5 across the whole archive, ranked by relevance ---
 
 async function renderSearchResults(query) {
-  document.getElementById("manage-panel").hidden = true;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
-  closeReader();
-  const list = document.getElementById("list");
-  list.hidden = false;
+  const list = showView("list");
   list.innerHTML = `<div class="section-label">// SEARCHING...</div>`;
 
   let data;
@@ -148,23 +159,13 @@ async function renderSearchResults(query) {
     return;
   }
 
+  const label = `// SEARCH RESULTS FOR "${esc(query)}"`;
   if (!data.articles.length) {
-    list.innerHTML = `<div class="section-label">// SEARCH RESULTS FOR "${escapeHtml(query)}"</div>
-      <div class="empty-state">NO MATCHES.</div>`;
+    list.innerHTML = `<div class="section-label">${label}</div><div class="empty-state">NO MATCHES.</div>`;
     return;
   }
-
-  const rows = data.articles.map((a) => `
-    <div class="row" data-id="${a.id}">
-      <span class="title">${a.title}</span>
-      <span class="meta">${formatMeta(a)}</span>
-    </div>
-  `).join("");
-
-  list.innerHTML = `<div class="section-label">// SEARCH RESULTS FOR "${escapeHtml(query)}" (${data.articles.length})</div>${rows}`;
-  list.querySelectorAll(".row").forEach((el) => {
-    el.addEventListener("click", () => openReader(Number(el.dataset.id)));
-  });
+  list.innerHTML = `<div class="section-label">${label} (${data.articles.length})</div>${articleRows(data.articles)}`;
+  wireRows(list);
 }
 
 function updateCounts(counts) {
@@ -179,11 +180,7 @@ function updateCounts(counts) {
   document.getElementById("footer-gauge").style.width = `${pct}%`;
 }
 
-// --- In-dashboard reader ---
-// Reads the real captured content (full article text for THN, the real
-// description for KEV) here instead of forwarding to the original site -
-// Neko's explicit request: this is meant to be the central place for
-// consumption, not a launchpad out to other pages.
+// --- Reader: the captured article, read in the dashboard ---
 
 async function openReader(id) {
   const overlay = document.getElementById("reader-overlay");
@@ -192,7 +189,7 @@ async function openReader(id) {
 
   let article;
   try {
-    article = await fetchJSON(`/api/article/${id}`);
+    article = await fetchJSON(`/api/article/${encodeURIComponent(id)}`);
   } catch (err) {
     overlay.innerHTML = `<div class="reader-body">${errorHTML(err)}</div>`;
     return;
@@ -221,24 +218,8 @@ async function openReader(id) {
   if (article.mentions_poc) metaParts.push("PoC/EXPLOIT DISCUSSED");
   if (article.exploited_in_wild) metaParts.push("REPORTS EXPLOITATION IN THE WILD");
 
-  // Real inline images the source article carried, shown alongside the
-  // text instead of the reader's right side sitting empty on wide
-  // screens - Neko's explicit request. Shown as captured, not every
-  // extracted image is guaranteed to be a technical diagram (some are
-  // decorative), so this is a real-content panel, not a curated one.
-  // Recolored toward the phosphor palette via a CSS filter rather than
-  // regenerated - a diagram's actual content must never be reinterpreted,
-  // only its color treatment. Hovering (or the explicit link) shows the
-  // real, unfiltered original.
-  const images = article.images || [];
-  // .reader-images-grid wraps just the cards, separate from the section
-  // label above it -- at the mobile/tablet breakpoint the grid switches
-  // to a wrapping flex row so cards can share or fill it, but the label
-  // must stay its own full-width heading above that row, not a flex
-  // sibling competing for the same row space (a real bug found and fixed
-  // live: without this wrapper, the label's own text width was eating
-  // into the row, leaving a single real image looking like it still had
-  // a dead gap beside it).
+  // Images as captured, recoloured by CSS; hover or the link shows the original.
+  const images = (article.images || []).map(safeUrl).filter(Boolean);
   const imagesHtml = images.length ? `
     <div class="reader-images">
       <div class="section-label">// CAPTURED IMAGES (${images.length})</div>
@@ -246,45 +227,38 @@ async function openReader(id) {
         ${images.map((src, i) => `
           <div class="reader-image-card">
             <div class="reader-image-index">IMAGE ${i + 1} OF ${images.length}</div>
-            <img class="reader-image" src="${src}" loading="lazy" alt="" data-src="${src}">
-            <a class="reader-image-original" href="${src}" target="_blank" rel="noopener">VIEW ORIGINAL &rarr;</a>
+            <img class="reader-image" src="${src}" loading="lazy" alt="">
+            <a class="reader-image-original" href="${src}" target="_blank" rel="noopener noreferrer">VIEW ORIGINAL &rarr;</a>
           </div>
         `).join("")}
       </div>
     </div>
   ` : "";
+  const link = safeUrl(article.link);
 
   overlay.innerHTML = `
-    <div class="reader-header">
-      <div class="reader-title">${article.title}</div>
-      <div class="reader-close" id="reader-close-btn">CLOSE [x]</div>
-    </div>
-    <div class="reader-meta">${metaParts.map((m) => `<span>${m}</span>`).join("")}</div>
+    ${readerHeader(article.title, "reader-close-btn", "CLOSE")}
+    <div class="reader-meta">${metaParts.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
     <div class="reader-main">
       <div class="reader-body">${renderArticleBody(article.body)}</div>
       ${imagesHtml}
     </div>
-    <a class="reader-source-link" href="${article.link}" target="_blank" rel="noopener">VIEW ORIGINAL SOURCE &rarr;</a>
+    ${link ? `<a class="reader-source-link" href="${link}" target="_blank" rel="noopener noreferrer">VIEW ORIGINAL SOURCE &rarr;</a>` : ""}
   `;
 
   document.getElementById("reader-close-btn").addEventListener("click", closeReader);
   overlay.querySelectorAll(".reader-image").forEach((img) => {
-    img.addEventListener("click", () => openImageLightbox(img.dataset.src));
+    img.addEventListener("click", () => openImageLightbox(img.src));
   });
 }
 
-// --- Image lightbox ---
-// Full-size, real-color zoom view for actually reading fine detail on a
-// real diagram - Neko's explicit request. Always shows true colors, never
-// the reader panel's themed filter, since the point of zooming in is
-// inspecting the real content accurately.
-
+// Full-size, true-colour zoom for reading fine detail on a diagram.
 function openImageLightbox(src) {
   const box = document.getElementById("image-lightbox");
   box.hidden = false;
   box.innerHTML = `
     <div class="reader-close" id="lightbox-close-btn">CLOSE [x]</div>
-    <img src="${src}" alt="">
+    <img src="${safeUrl(src)}" alt="">
   `;
   box.addEventListener("click", closeImageLightbox);
   document.getElementById("lightbox-close-btn").addEventListener("click", (e) => {
@@ -305,18 +279,8 @@ function closeReader() {
   overlay.innerHTML = "";
 }
 
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// Real markdown pipe-tables show up in ingested full-text (e.g. ZDI's
-// monthly patch-review roundups) but were being dumped as raw escaped
-// text -- a wall of "| Yes | No | Yes |" with no visible column headers,
-// genuinely illegible. This splits the body into plain-text runs and
-// real pipe-table blocks, rendering the latter as actual <table>
-// markup instead of flowing text.
+// Markdown pipe-tables in article text (ZDI's patch roundups, for one) are
+// rendered as real tables; everything else stays escaped plain text.
 function splitTableRow(line) {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
 }
@@ -328,14 +292,10 @@ function isSeparatorCells(cells) {
 function renderMarkdownTable(lines) {
   const rows = lines.map(splitTableRow);
   const sepIdxs = rows.reduce((acc, cells, i) => (isSeparatorCells(cells) ? [...acc, i] : acc), []);
-  if (!sepIdxs.length) return escapeHtml(lines.join("\n"));
+  if (!sepIdxs.length) return esc(lines.join("\n"));
 
-  // Some real source tables (ZDI's Apple review among them) carry a
-  // caption row -- essentially prose explaining what the columns mean,
-  // like "Yes/No indicates whether each update is affected" -- ahead of
-  // their real header, with its own separator row in between. When more
-  // than one separator exists, only the row right before the LAST one is
-  // the real header; everything earlier is caption text, not data.
+  // With several separator rows, only the row before the last one is the
+  // header; anything earlier is a caption.
   const lastSep = sepIdxs[sepIdxs.length - 1];
   const headerIdx = lastSep - 1;
   const captionText = rows.slice(0, headerIdx)
@@ -353,17 +313,17 @@ function renderMarkdownTable(lines) {
     return "";
   };
 
-  const headHtml = `<tr>${headerCells.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>`;
+  const headHtml = `<tr>${headerCells.map((c) => `<th>${esc(c)}</th>`).join("")}</tr>`;
   const bodyHtml = bodyRows.map((cells) =>
-    `<tr>${cells.map((c) => `<td${yesNoClass(c)}>${escapeHtml(c)}</td>`).join("")}</tr>`
+    `<tr>${cells.map((c) => `<td${yesNoClass(c)}>${esc(c)}</td>`).join("")}</tr>`
   ).join("");
 
-  return `${captionText ? `<div class="reader-table-caption">${escapeHtml(captionText)}</div>` : ""}
+  return `${captionText ? `<div class="reader-table-caption">${esc(captionText)}</div>` : ""}
     <div class="reader-table-wrap"><table class="reader-table"><thead>${headHtml}</thead><tbody>${bodyHtml}</tbody></table></div>`;
 }
 
 function renderArticleBody(text) {
-  const lines = text.split("\n");
+  const lines = String(text ?? "").split("\n");
   const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
   const blocks = [];
   let textBuf = [];
@@ -384,26 +344,18 @@ function renderArticleBody(text) {
     }
   }
   flushText();
-  return blocks.map((b) => b.type === "table" ? renderMarkdownTable(b.lines) : escapeHtml(b.lines.join("\n"))).join("");
+  return blocks.map((b) => b.type === "table" ? renderMarkdownTable(b.lines) : esc(b.lines.join("\n"))).join("");
 }
 
-// --- MITRE ATT&CK matrix ---
-// Real tactics x techniques from MITRE's own data (attack.py), with a real
-// count of matched articles per technique - a technique with zero matches
-// still renders, dimmed, so the whole framework stays visible, not just a
-// filtered list of what happened to match.
+// --- MITRE ATT&CK matrix: every technique, dimmed where nothing matched ---
 
 let attackMatrixCache = null;
 
 async function renderAttackMatrix() {
-  document.getElementById("list").hidden = true;
-  document.getElementById("manage-panel").hidden = true;
-  closeReader();
-  const view = document.getElementById("attack-view");
-  view.hidden = false;
+  const view = showView("attack-view");
 
   if (!attackMatrixCache) {
-    view.innerHTML = `<div class="attack-search"><input disabled placeholder="LOADING REAL ATT&CK DATA..."></div>`;
+    view.innerHTML = `<div class="attack-search"><input disabled placeholder="LOADING REAL ATT&amp;CK DATA..."></div>`;
     try {
       attackMatrixCache = await fetchJSON("/api/attack/matrix");
     } catch (err) {
@@ -420,14 +372,14 @@ async function renderAttackMatrix() {
       .sort((a, b) => b[1].count - a[1].count);
 
     const rows = inTactic.map(([id, info]) => `
-      <div class="attack-tech ${info.count > 0 ? "has-matches" : ""}" data-id="${id}" data-name="${info.name.toLowerCase()}">
-        ${id}: ${info.name}${info.count > 0 ? `<span class="tech-count">${info.count}</span>` : ""}
+      <div class="attack-tech ${info.count > 0 ? "has-matches" : ""}" data-id="${esc(id)}" data-name="${esc(info.name.toLowerCase())}">
+        ${esc(id)}: ${esc(info.name)}${info.count > 0 ? `<span class="tech-count">${info.count}</span>` : ""}
       </div>
     `).join("");
 
     return `
-      <div class="attack-col" data-tactic="${tactic.shortname}">
-        <div class="attack-col-header">${tactic.name.toUpperCase()}</div>
+      <div class="attack-col" data-tactic="${esc(tactic.shortname)}">
+        <div class="attack-col-header">${esc(tactic.name.toUpperCase())}</div>
         ${rows}
       </div>
     `;
@@ -455,49 +407,26 @@ async function openAttackTechnique(techniqueId) {
   const view = document.getElementById("attack-view");
   let data;
   try {
-    data = await fetchJSON(`/api/attack/technique/${techniqueId}`);
+    data = await fetchJSON(`/api/attack/technique/${encodeURIComponent(techniqueId)}`);
   } catch (err) {
     view.innerHTML = errorHTML(err);
     return;
   }
 
-  const rows = data.articles.map((a) => `
-    <div class="row" data-id="${a.id}">
-      <span class="title">${a.title}</span>
-      <span class="meta">${formatMeta(a)}</span>
-    </div>
-  `).join("");
-
   view.innerHTML = `
-    <div class="reader-header">
-      <div class="reader-title">${data.technique_id}: ${data.technique_name}</div>
-      <div class="reader-close" id="attack-back-btn">BACK TO MATRIX [x]</div>
-    </div>
+    ${readerHeader(`${data.technique_id}: ${data.technique_name}`, "attack-back-btn", "BACK TO MATRIX")}
     <div class="list">
-      ${rows || '<div class="empty-state">NO MATCHED ARTICLES.</div>'}
+      ${articleRows(data.articles) || '<div class="empty-state">NO MATCHED ARTICLES.</div>'}
     </div>
   `;
-
   document.getElementById("attack-back-btn").addEventListener("click", renderAttackMatrix);
-  view.querySelectorAll(".row").forEach((el) => {
-    el.addEventListener("click", () => openReader(Number(el.dataset.id)));
-  });
+  wireRows(view);
 }
 
-// --- Real public PoC availability (nomi-sec/PoC-in-GitHub enrichment) ---
-// A real CVE-keyed lookup, not an article feed - shows how many real
-// public PoC repos exist for CVEs NekoCTI has already captured, cross-
-// referenced against its own coverage (article count, a real CVSS score
-// if one was ever recorded). Not cached, unlike the ATT&CK matrix -
-// PoC data changes with every "run check now" and should read fresh.
+// --- Public PoC availability (nomi-sec/PoC-in-GitHub), read fresh each time ---
 
 async function renderPocsOverview() {
-  document.getElementById("list").hidden = true;
-  document.getElementById("manage-panel").hidden = true;
-  document.getElementById("attack-view").hidden = true;
-  closeReader();
-  const view = document.getElementById("pocs-view");
-  view.hidden = false;
+  const view = showView("pocs-view");
   view.innerHTML = `<div class="attack-search"><input disabled placeholder="LOADING REAL POC DATA..."></div>`;
 
   let data;
@@ -511,27 +440,30 @@ async function renderPocsOverview() {
   const cves = data.cves || [];
   const countEl = document.getElementById("count-pocs");
   if (countEl) countEl.textContent = cves.length;
-  const rows = cves.map((c) => `
-    <div class="row poc-row" data-cve="${c.cve_id}" data-search="${c.cve_id.toLowerCase()} ${(c.title || "").toLowerCase()} ${c.vendors.join(" ").toLowerCase()} ${c.attack_techniques.map((t) => t.technique_id).join(" ").toLowerCase()}">
+  const rows = cves.map((c) => {
+    const score = cveScore(c);
+    const search = [c.cve_id, c.title || "", ...c.vendors, ...c.attack_techniques.map((t) => t.technique_id)].join(" ").toLowerCase();
+    return `
+    <div class="row poc-row" data-cve="${esc(c.cve_id)}" data-search="${esc(search)}">
       <span class="title">
-        ${c.cve_id}${cveScore(c) ? ` <span class="${cveScore(c) >= 9 ? 'cve-crit' : ''}">(CVSS ${cveScore(c)}${c.nvd_severity ? ` ${c.nvd_severity}` : ""})</span>` : ""}
+        ${esc(c.cve_id)}${score ? ` <span class="${score >= 9 ? "cve-crit" : ""}">(CVSS ${esc(score)}${c.nvd_severity ? ` ${esc(c.nvd_severity)}` : ""})</span>` : ""}
         ${exploitTags(c) ? ` ${exploitTags(c)}` : ""}
-        ${c.title ? `<div class="poc-cve-desc">${escapeHtml(c.title)}</div>` : ""}
-        ${c.vendors.length ? `<div class="poc-cve-vendors">${c.vendors.map(escapeHtml).join(", ")}</div>` : ""}
+        ${c.title ? `<div class="poc-cve-desc">${esc(c.title)}</div>` : ""}
+        ${c.vendors.length ? `<div class="poc-cve-vendors">${c.vendors.map(esc).join(", ")}</div>` : ""}
         ${c.attack_techniques.length ? `<div class="poc-attack-tags">${c.attack_techniques.map((t) =>
-          `<span class="attack-tag ${t.confidence === "expert" ? "attack-tag-expert" : "attack-tag-llm"}" title="${escapeHtml(t.technique_name)}">${t.technique_id}</span>`
+          `<span class="attack-tag ${t.confidence === "expert" ? "attack-tag-expert" : "attack-tag-llm"}" title="${esc(t.technique_name)}">${esc(t.technique_id)}</span>`
         ).join("")}</div>` : ""}
       </span>
       <span class="meta">
-        <span>${c.latest_activity_at ? c.latest_activity_at.slice(0, 10) : ""}</span>
+        <span>${c.latest_activity_at ? esc(c.latest_activity_at.slice(0, 10)) : ""}</span>
         ${c.has_public_repo
-          ? `<span>${c.poc_count} PUBLIC REPO${c.poc_count === 1 ? "" : "S"}</span><span>${c.max_stars}&#9733; TOP</span>`
+          ? `<span>${c.poc_count} PUBLIC REPO${c.poc_count === 1 ? "" : "S"}</span><span>${esc(c.max_stars)}&#9733; TOP</span>`
           : `<span class="poc-mention-only">MENTIONED, NO PUBLIC REPO</span>`}
         ${c.mention_count ? `<span>${c.mention_count} DISCUSSED IN</span>` : ""}
         ${c.article_count ? `<span>${c.article_count} ARTICLE${c.article_count === 1 ? "" : "S"}</span>` : ""}
       </span>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
 
   view.innerHTML = `
     <div class="attack-search"><input id="pocs-search-input" placeholder="SEARCH CVE ID..."></div>
@@ -562,73 +494,61 @@ async function openPocDetail(cveId) {
     return;
   }
 
-  const pocRows = data.pocs.map((p) => `
+  const pocRows = data.pocs.map((p) => {
+    const url = safeUrl(p.repo_url);
+    const name = esc(p.repo_full_name);
+    return `
     <div class="row poc-repo-row">
       <span class="title">
-        <a href="${p.repo_url}" target="_blank" rel="noopener">${p.repo_full_name}</a>
-        ${p.description ? `<div class="poc-repo-desc">${escapeHtml(p.description)}</div>` : ""}
+        ${url ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${name}</a>` : name}
+        ${p.description ? `<div class="poc-repo-desc">${esc(p.description)}</div>` : ""}
       </span>
       <span class="meta">
-        <span>${p.stars}&#9733;</span>
-        <span>${p.repo_pushed_at ? p.repo_pushed_at.slice(0, 10) : ""}</span>
+        <span>${esc(p.stars)}&#9733;</span>
+        <span>${p.repo_pushed_at ? esc(p.repo_pushed_at.slice(0, 10)) : ""}</span>
       </span>
-    </div>
-  `).join("");
-
-  const articleRows = data.articles.map((a) => `
-    <div class="row" data-id="${a.id}">
-      <span class="title">${a.mentions_poc ? '<span class="poc-mention-flag">[POC DISCUSSED]</span> ' : ""}${a.title}</span>
-      <span class="meta">${formatMeta(a)}</span>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
 
   const mappingTypeLabel = { exploitation_technique: "EXPLOITATION TECHNIQUE", primary_impact: "PRIMARY IMPACT",
     secondary_impact: "SECONDARY IMPACT" };
-  const attackRows = data.attack_techniques.map((t) => `
+  const attackRows = data.attack_techniques.map((t) => {
+    const source = safeUrl(t.source_url);
+    return `
     <div class="row poc-attack-row">
       <span class="title">
-        ${t.technique_id}: ${escapeHtml(t.technique_name)}
-        ${t.evidence ? `<div class="poc-repo-desc">${escapeHtml(t.evidence)}</div>` : ""}
-        ${t.source_url ? `<a class="poc-attack-source" href="${t.source_url}" target="_blank" rel="noopener">SOURCE &rarr;</a>` : ""}
+        ${esc(t.technique_id)}: ${esc(t.technique_name)}
+        ${t.evidence ? `<div class="poc-repo-desc">${esc(t.evidence)}</div>` : ""}
+        ${source ? `<a class="poc-attack-source" href="${source}" target="_blank" rel="noopener noreferrer">SOURCE &rarr;</a>` : ""}
       </span>
       <span class="meta">
         ${t.confidence === "expert"
-          ? `<span class="attack-tag attack-tag-expert">MITRE-MAPPED</span><span>${mappingTypeLabel[t.mapping_type] || t.mapping_type || ""}</span>`
+          ? `<span class="attack-tag attack-tag-expert">MITRE-MAPPED</span><span>${esc(mappingTypeLabel[t.mapping_type] || t.mapping_type || "")}</span>`
           : `<span class="attack-tag attack-tag-llm">BEST GUESS (LLM)</span>`}
       </span>
-    </div>
-  `).join("");
+    </div>`;
+  }).join("");
 
   view.innerHTML = `
-    <div class="reader-header">
-      <div class="reader-title">${data.cve_id}</div>
-      <div class="reader-close" id="pocs-back-btn">BACK TO POCS [x]</div>
-    </div>
+    ${readerHeader(data.cve_id, "pocs-back-btn", "BACK TO POCS")}
     <div class="list sublist sublist-loose">
       <div class="section-label">// PUBLIC POC REPOS (${data.pocs.length})</div>
       ${pocRows || '<div class="empty-state">NONE FOUND - MAY STILL BE DISCUSSED IN COVERAGE BELOW WITHOUT A PUBLIC REPO.</div>'}
-      <div class="section-label">// MITRE ATT&CK (${data.attack_techniques.length})</div>
+      <div class="section-label">// MITRE ATT&amp;CK (${data.attack_techniques.length})</div>
       ${attackRows || '<div class="empty-state">NOT MAPPED YET - RUN classify-pocs TO TAG THIS CVE.</div>'}
       <div class="section-label">// NEKOCTI COVERAGE (${data.articles.length})</div>
-      ${articleRows || '<div class="empty-state">NO CAPTURED ARTICLES MENTION THIS CVE.</div>'}
+      ${articleRows(data.articles, { pocFlag: true }) || '<div class="empty-state">NO CAPTURED ARTICLES MENTION THIS CVE.</div>'}
     </div>
   `;
 
   document.getElementById("pocs-back-btn").addEventListener("click", renderPocsOverview);
-  view.querySelectorAll(".row[data-id]").forEach((el) => {
-    el.addEventListener("click", () => openReader(Number(el.dataset.id)));
-  });
+  wireRows(view);
 }
 
-// --- Watchlist / entities management panel ---
+// --- Watchlist management ---
 
 async function renderWatchlistPanel() {
-  const list = document.getElementById("list");
-  const panel = document.getElementById("manage-panel");
-  list.hidden = true;
-  panel.hidden = false;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
+  const panel = showView("manage-panel");
 
   let data;
   try {
@@ -640,10 +560,10 @@ async function renderWatchlistPanel() {
   const vendors = data.vendors || {};
 
   panel.innerHTML = Object.entries(vendors).map(([category, terms]) => `
-    <div class="category" data-category="${category}">
-      <div class="category-label">// ${category.toUpperCase().replace(/_/g, " ")}</div>
+    <div class="category" data-category="${esc(category)}">
+      <div class="category-label">// ${esc(category.toUpperCase().replace(/_/g, " "))}</div>
       <div class="term-list">
-        ${terms.map((t) => `<span class="term" data-term="${t}">${t}<span class="remove">x</span></span>`).join("")}
+        ${terms.map((t) => `<span class="term" data-term="${esc(t)}">${esc(t)}<span class="remove">x</span></span>`).join("")}
       </div>
     </div>
   `).join("") + `
@@ -659,9 +579,8 @@ async function renderWatchlistPanel() {
       e.stopPropagation();
       const termEl = el.closest(".term");
       const category = termEl.closest(".category").dataset.category;
-      const term = termEl.dataset.term;
-      vendors[category] = vendors[category].filter((t) => t !== term);
-      await fetchJSON("/api/watchlist", { method: "PUT", body: JSON.stringify({ vendors }) });
+      vendors[category] = vendors[category].filter((t) => t !== termEl.dataset.term);
+      await writeJSON("/api/watchlist", "PUT", { vendors });
       renderWatchlistPanel();
     });
   });
@@ -672,215 +591,100 @@ async function renderWatchlistPanel() {
     if (!category || !term) return;
     vendors[category] = vendors[category] || [];
     vendors[category].push(term);
-    await fetchJSON("/api/watchlist", { method: "PUT", body: JSON.stringify({ vendors }) });
+    await writeJSON("/api/watchlist", "PUT", { vendors });
     renderWatchlistPanel();
   });
 }
 
-async function renderEntitiesPanel() {
-  const list = document.getElementById("list");
-  const panel = document.getElementById("manage-panel");
-  list.hidden = true;
-  panel.hidden = false;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
+// --- Tracked entities and campaigns: the same panel and drill-down, two
+// lists. A campaign is a technique or tooling name, not an actor. ---
+
+const TRACKED = {
+  entities: {
+    api: "/api/tags", key: "entities", label: "TRACKED ENTITIES", empty: "NO ENTITIES TRACKED YET.",
+    namePlaceholder: "name (e.g. threat actor / campaign)", articles: "/api/entity/", nameKey: "entity_name",
+    back: "BACK TO ENTITIES",
+  },
+  campaigns: {
+    api: "/api/campaigns", key: "campaigns", label: "TRACKED CAMPAIGNS", empty: "NO CAMPAIGNS TRACKED YET.",
+    namePlaceholder: "name (e.g. ClickFix, DoubleCup)", articles: "/api/campaign/", nameKey: "campaign_name",
+    back: "BACK TO CAMPAIGNS",
+  },
+};
+
+async function renderTrackedPanel(kind) {
+  const cfg = TRACKED[kind];
+  const panel = showView("manage-panel");
 
   let data;
   try {
-    data = await fetchJSON("/api/tags");
+    data = await fetchJSON(cfg.api);
   } catch (err) {
     panel.innerHTML = errorHTML(err);
     return;
   }
-  const entities = data.entities || [];
+  const items = data[cfg.key] || [];
+  const save = async () => {
+    await writeJSON(cfg.api, "PUT", { [cfg.key]: items });
+    renderTrackedPanel(kind);
+  };
 
-  panel.innerHTML = `<div class="category-label">// TRACKED ENTITIES</div>` +
-    (entities.length
-      ? entities.map((e, i) => `
+  panel.innerHTML = `<div class="category-label">// ${cfg.label}</div>` +
+    (items.length
+      ? items.map((item, i) => `
         <div class="entity-card" data-index="${i}">
-          <div class="entity-name">${e.name} <span class="remove" style="float:right;cursor:pointer;">x</span></div>
-          <div class="entity-aliases">${(e.aliases || []).join(", ") || "no aliases"}</div>
+          <div class="entity-name">${esc(item.name)} <span class="remove remove-right">x</span></div>
+          <div class="entity-aliases">${(item.aliases || []).map(esc).join(", ") || "no aliases"}</div>
         </div>
       `).join("")
-      : `<div class="empty-state">NO ENTITIES TRACKED YET.</div>`) +
+      : `<div class="empty-state">${cfg.empty}</div>`) +
     `<div class="add-row">
-      <input id="new-entity-name" placeholder="name (e.g. threat actor / campaign)">
-      <input id="new-entity-aliases" placeholder="aliases, comma-separated">
-      <button id="add-entity-btn">ADD</button>
+      <input id="new-tracked-name" placeholder="${esc(cfg.namePlaceholder)}">
+      <input id="new-tracked-aliases" placeholder="aliases, comma-separated">
+      <button id="add-tracked-btn">ADD</button>
     </div>`;
 
   panel.querySelectorAll(".entity-card .remove").forEach((el) => {
-    el.addEventListener("click", async (e) => {
+    el.addEventListener("click", (e) => {
       e.stopPropagation();
-      const idx = Number(el.closest(".entity-card").dataset.index);
-      entities.splice(idx, 1);
-      await fetchJSON("/api/tags", { method: "PUT", body: JSON.stringify({ entities }) });
-      renderEntitiesPanel();
+      items.splice(Number(el.closest(".entity-card").dataset.index), 1);
+      save();
     });
   });
 
   panel.querySelectorAll(".entity-card").forEach((el) => {
-    el.addEventListener("click", () => {
-      const idx = Number(el.dataset.index);
-      openEntityArticles(entities[idx].name);
-    });
+    el.addEventListener("click", () => openTrackedArticles(kind, items[Number(el.dataset.index)].name));
   });
 
-  document.getElementById("add-entity-btn").addEventListener("click", async () => {
-    const name = document.getElementById("new-entity-name").value.trim();
-    const aliasesRaw = document.getElementById("new-entity-aliases").value.trim();
+  document.getElementById("add-tracked-btn").addEventListener("click", () => {
+    const name = document.getElementById("new-tracked-name").value.trim();
+    const aliasesRaw = document.getElementById("new-tracked-aliases").value.trim();
     if (!name) return;
     const aliases = aliasesRaw ? aliasesRaw.split(",").map((a) => a.trim()).filter(Boolean) : [];
-    entities.push({ name, aliases });
-    await fetchJSON("/api/tags", { method: "PUT", body: JSON.stringify({ entities }) });
-    renderEntitiesPanel();
+    items.push({ name, aliases });
+    save();
   });
 }
 
-// --- Campaign tracking panel: same shape as entities (a name plus
-// aliases, click-through to matched articles), but a distinct category -
-// a campaign (ClickFix, a specific RAT) is a technique/tooling name, not
-// an actor, so it lives in its own tab rather than being folded into
-// APT/Entities.
-
-async function renderCampaignsPanel() {
-  const list = document.getElementById("list");
-  const panel = document.getElementById("manage-panel");
-  list.hidden = true;
-  panel.hidden = false;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
-
-  let data;
-  try {
-    data = await fetchJSON("/api/campaigns");
-  } catch (err) {
-    panel.innerHTML = errorHTML(err);
-    return;
-  }
-  const campaigns = data.campaigns || [];
-
-  panel.innerHTML = `<div class="category-label">// TRACKED CAMPAIGNS</div>` +
-    (campaigns.length
-      ? campaigns.map((c, i) => `
-        <div class="entity-card" data-index="${i}">
-          <div class="entity-name">${c.name} <span class="remove" style="float:right;cursor:pointer;">x</span></div>
-          <div class="entity-aliases">${(c.aliases || []).join(", ") || "no aliases"}</div>
-        </div>
-      `).join("")
-      : `<div class="empty-state">NO CAMPAIGNS TRACKED YET.</div>`) +
-    `<div class="add-row">
-      <input id="new-campaign-name" placeholder="name (e.g. ClickFix, DoubleCup)">
-      <input id="new-campaign-aliases" placeholder="aliases, comma-separated">
-      <button id="add-campaign-btn">ADD</button>
-    </div>`;
-
-  panel.querySelectorAll(".entity-card .remove").forEach((el) => {
-    el.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const idx = Number(el.closest(".entity-card").dataset.index);
-      campaigns.splice(idx, 1);
-      await fetchJSON("/api/campaigns", { method: "PUT", body: JSON.stringify({ campaigns }) });
-      renderCampaignsPanel();
-    });
-  });
-
-  panel.querySelectorAll(".entity-card").forEach((el) => {
-    el.addEventListener("click", () => {
-      const idx = Number(el.dataset.index);
-      openCampaignArticles(campaigns[idx].name);
-    });
-  });
-
-  document.getElementById("add-campaign-btn").addEventListener("click", async () => {
-    const name = document.getElementById("new-campaign-name").value.trim();
-    const aliasesRaw = document.getElementById("new-campaign-aliases").value.trim();
-    if (!name) return;
-    const aliases = aliasesRaw ? aliasesRaw.split(",").map((a) => a.trim()).filter(Boolean) : [];
-    campaigns.push({ name, aliases });
-    await fetchJSON("/api/campaigns", { method: "PUT", body: JSON.stringify({ campaigns }) });
-    renderCampaignsPanel();
-  });
-}
-
-async function openCampaignArticles(name) {
-  document.getElementById("manage-panel").hidden = true;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
-  closeReader();
-  const list = document.getElementById("list");
-  list.hidden = false;
+async function openTrackedArticles(kind, name) {
+  const cfg = TRACKED[kind];
+  const list = showView("list");
   list.innerHTML = `<div class="section-label">// LOADING...</div>`;
 
   let data;
   try {
-    data = await fetchJSON(`/api/campaign/${encodeURIComponent(name)}`);
+    data = await fetchJSON(`${cfg.articles}${encodeURIComponent(name)}`);
   } catch (err) {
     list.innerHTML = errorHTML(err);
     return;
   }
 
-  const rows = data.articles.map((a) => `
-    <div class="row" data-id="${a.id}">
-      <span class="title">${a.title}</span>
-      <span class="meta">${formatMeta(a)}</span>
-    </div>
-  `).join("");
-
   list.innerHTML = `
-    <div class="reader-header">
-      <div class="reader-title">${data.campaign_name}</div>
-      <div class="reader-close" id="campaign-back-btn">BACK TO CAMPAIGNS [x]</div>
-    </div>
-    ${rows || '<div class="empty-state">NO ARTICLES MATCHED YET.</div>'}
+    ${readerHeader(data[cfg.nameKey], "tracked-back-btn", cfg.back)}
+    ${articleRows(data.articles) || '<div class="empty-state">NO ARTICLES MATCHED YET.</div>'}
   `;
-
-  document.getElementById("campaign-back-btn").addEventListener("click", renderCampaignsPanel);
-  list.querySelectorAll(".row").forEach((el) => {
-    el.addEventListener("click", () => openReader(Number(el.dataset.id)));
-  });
-}
-
-// --- Entity click-through: same pattern as ATT&CK technique click-through,
-// reusing the #list element rather than the manage panel, since this is a
-// real filtered article view, not entity CRUD.
-
-async function openEntityArticles(name) {
-  document.getElementById("manage-panel").hidden = true;
-  document.getElementById("attack-view").hidden = true;
-  document.getElementById("pocs-view").hidden = true;
-  closeReader();
-  const list = document.getElementById("list");
-  list.hidden = false;
-  list.innerHTML = `<div class="section-label">// LOADING...</div>`;
-
-  let data;
-  try {
-    data = await fetchJSON(`/api/entity/${encodeURIComponent(name)}`);
-  } catch (err) {
-    list.innerHTML = errorHTML(err);
-    return;
-  }
-
-  const rows = data.articles.map((a) => `
-    <div class="row" data-id="${a.id}">
-      <span class="title">${a.title}</span>
-      <span class="meta">${formatMeta(a)}</span>
-    </div>
-  `).join("");
-
-  list.innerHTML = `
-    <div class="reader-header">
-      <div class="reader-title">${data.entity_name}</div>
-      <div class="reader-close" id="entity-back-btn">BACK TO ENTITIES [x]</div>
-    </div>
-    ${rows || '<div class="empty-state">NO ARTICLES MATCHED YET.</div>'}
-  `;
-
-  document.getElementById("entity-back-btn").addEventListener("click", renderEntitiesPanel);
-  list.querySelectorAll(".row").forEach((el) => {
-    el.addEventListener("click", () => openReader(Number(el.dataset.id)));
-  });
+  document.getElementById("tracked-back-btn").addEventListener("click", () => renderTrackedPanel(kind));
+  wireRows(list);
 }
 
 // --- Tab / subtab wiring ---
@@ -968,12 +772,8 @@ function refresh() {
     renderPocsOverview();
   } else if (state.tab === "watchlist" && state.managingWatchlist) {
     renderWatchlistPanel();
-  } else if (state.tab === "entities") {
-    // Entities starts empty, so the management panel is the primary view.
-    renderEntitiesPanel();
-  } else if (state.tab === "campaigns") {
-    // Same reasoning as entities - the management panel is the primary view.
-    renderCampaignsPanel();
+  } else if (state.tab in TRACKED) {
+    renderTrackedPanel(state.tab);   // these lists start empty, so the panel leads
   } else {
     loadArticles();
   }
@@ -993,12 +793,8 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// --- Manual "run check now" ---
-// Real on-demand ingestion from the dashboard itself, Neko's explicit
-// request, mirroring TCG Price Tracker's own "Run price check now"
-// button. The backend runs the real job in a background thread and
-// guards against overlap server-side (see server.py) - this just starts
-// it and polls for the real result rather than trusting a fixed timeout.
+// --- Run check now: the server runs it in the background and refuses an
+// overlapping run; this starts it and polls for the result ---
 
 const runCheckBtn = document.getElementById("run-check-btn");
 let ingestPollTimer = null;
@@ -1018,7 +814,7 @@ function startIngestPolling() {
   ingestPollTimer = setInterval(pollIngestStatus, 3000);
 }
 
-// "12 minutes ago" style, or an absolute date once it stops being useful.
+// "12m ago" style, or "never".
 function ago(iso) {
   if (!iso) return "never";
   const then = new Date(iso.endsWith("Z") || iso.includes("+") ? iso : iso + "Z");
@@ -1030,25 +826,23 @@ function ago(iso) {
   return `${Math.round(mins / 1440)}d ago`;
 }
 
-// The archive is deliberately never pruned, so freshness is about the facts
-// having been re-checked, not about the library being small.
+// The archive is never pruned, so freshness means the facts were re-checked.
 function renderFreshness(f) {
   const el = document.getElementById("freshness-line");
   if (!el || !f) return;
   const waiting = f.cves_awaiting_nvd
-    ? ` &middot; <span class="fresh-warn">${f.cves_awaiting_nvd} CVE${f.cves_awaiting_nvd === 1 ? "" : "s"} awaiting severity</span>`
+    ? ` &middot; <span class="fresh-warn">${esc(f.cves_awaiting_nvd)} CVE${f.cves_awaiting_nvd === 1 ? "" : "s"} awaiting severity</span>`
     : "";
   el.innerHTML =
     `LAST CHECK ${ago(f.last_article_fetched_at)}` +
-    ` &middot; EPSS ${ago(f.last_epss_at)}${f.epss_data_date ? ` (data ${f.epss_data_date})` : ""}` +
+    ` &middot; EPSS ${ago(f.last_epss_at)}${f.epss_data_date ? ` (data ${esc(f.epss_data_date)})` : ""}` +
     ` &middot; KEV ${ago(f.last_kev_at)}` +
-    ` &middot; SEVERITY ${f.cves_with_severity}/${f.cves_total}` +
-    ` &middot; ${f.kev_listed} KEV &middot; ${f.reported_exploited} REPORTED EXPLOITED` +
+    ` &middot; SEVERITY ${esc(f.cves_with_severity)}/${esc(f.cves_total)}` +
+    ` &middot; ${esc(f.kev_listed)} KEV &middot; ${esc(f.reported_exploited)} REPORTED EXPLOITED` +
     waiting;
 
-  // Phone/tablet footer shows only the headline ("2H AGO"); the full line
-  // above opens on tap. The warn class keeps an awaiting-severity backlog
-  // visible even while the detail is folded away.
+  // Phone/tablet footer shows the headline; the full line opens on tap, and
+  // the warn class keeps an awaiting-severity backlog visible meanwhile.
   const agoEl = document.getElementById("footer-ago");
   if (agoEl) agoEl.textContent = ` · ${ago(f.last_article_fetched_at).toUpperCase()}`;
   document.getElementById("footer-status-wrap")?.classList.toggle("has-warn", Boolean(f.cves_awaiting_nvd));
@@ -1059,7 +853,7 @@ async function refreshFreshness() {
     const status = await fetchJSON("/api/ingest/status");
     renderFreshness(status.freshness);
   } catch (err) {
-    // The dashboard's own error states cover an unreachable backend.
+    // The views' own error states cover an unreachable backend.
   }
 }
 
@@ -1087,13 +881,10 @@ async function pollIngestStatus() {
   if (status.error) {
     setRunCheckIdle("CHECK FAILED");
   } else if (status.results) {
-    // Articles only: enrichment entries (PoC lookups) report repos found in
-    // their "new" field, which once inflated this to +3,507 for 223 articles.
+    // Articles only: enrichment entries count repos found, not articles.
     const totalNew = status.results
       .filter((r) => r.kind !== "enrichment")
       .reduce((sum, r) => sum + (r.new || 0), 0);
-    // The check also re-verifies the facts (see enrich.refresh_after_ingest),
-    // so a run that found no new articles still did real work.
     const e = status.enrich;
     const extra = status.enrich_error
       ? ", REFRESH FAILED"
@@ -1111,17 +902,18 @@ runCheckBtn.addEventListener("click", async () => {
   if (runCheckBtn.classList.contains("running")) return;
   setRunCheckRunning();
   try {
-    const res = await fetch("/api/ingest/run", { method: "POST" });
-    await res.json();
+    await writeJSON("/api/ingest/run", "POST");
   } catch (err) {
-    setRunCheckIdle("RUN CHECK NOW");
-    return;
+    // A 409 means a check is already running: poll it rather than give up.
+    if (!String(err.message).includes("409")) {
+      setRunCheckIdle("RUN CHECK NOW");
+      return;
+    }
   }
   startIngestPolling();
 });
 
-// Reflects a check already running (started from another tab, or right
-// before this page loaded) instead of showing a stale idle button.
+// Reflect a check already running (another tab, or just before this load).
 (async () => {
   try {
     const status = await fetchJSON("/api/ingest/status");
@@ -1130,17 +922,12 @@ runCheckBtn.addEventListener("click", async () => {
       startIngestPolling();
     }
   } catch (err) {
-    // Backend not reachable at load time - the app's own error states
-    // elsewhere already cover this; nothing extra needed here.
+    // Covered by the views' own error states.
   }
 })();
 
-// --- Phone / tablet navigation (1023px and below) ---
-// Neko's call, 23 September 2026: the eight-tab row wrapped onto five lines
-// on a phone, so below 1024px CSS hides it and shows one slim bar plus a
-// menu. The .tab elements stay the single source of truth: the menu is
-// rebuilt from them each time it opens and a menu item just clicks its
-// tab, so tab switching, counts and search behave exactly as on desktop.
+// --- Phone / tablet navigation (1023px and below): one slim bar and a
+// menu built from the .tab elements, which stay the source of truth ---
 
 const navMenu = document.getElementById("nav-menu");
 const menuBtn = document.getElementById("menu-btn");
@@ -1168,8 +955,8 @@ function syncMobileBar() {
 function buildNavMenu() {
   const items = [...document.querySelectorAll(".topnav .tab")].map((t) => {
     const selected = t.classList.contains("active");
-    return `<button class="row nav-item${selected ? " selected" : ""}" type="button" data-tab="${t.dataset.tab}"${selected ? ' aria-current="page"' : ""}>
-      <span class="title">${tabLabel(t)}</span><span class="meta">${tabCount(t)}</span>
+    return `<button class="row nav-item${selected ? " selected" : ""}" type="button" data-tab="${esc(t.dataset.tab)}"${selected ? ' aria-current="page"' : ""}>
+      <span class="title">${esc(tabLabel(t))}</span><span class="meta">${esc(tabCount(t))}</span>
     </button>`;
   }).join("");
   navMenu.innerHTML = `<div class="section-label">// SECTIONS</div>${items}`;
@@ -1197,15 +984,13 @@ function setMenuOpen(open) {
 menuBtn.addEventListener("click", () => setMenuOpen(navMenu.hidden));
 mbCurrent.addEventListener("click", () => setMenuOpen(navMenu.hidden));
 
-// Counts arrive asynchronously and the POCS count is set by its own view,
-// so watch the tab row rather than hooking every place that writes to it.
+// Counts arrive asynchronously, so watch the tab row.
 new MutationObserver(syncMobileBar).observe(document.querySelector(".topnav"), {
   subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["class"],
 });
 syncMobileBar();
 
-// Search folds into an icon on phone/tablet so the range buttons keep the
-// row; tapping it swaps the row over to the search field.
+// Search folds into an icon on phone/tablet and takes the row over when open.
 function setSearchOpen(open) {
   subnavEl.classList.toggle("searching", open);
   searchToggle.setAttribute("aria-expanded", String(open));

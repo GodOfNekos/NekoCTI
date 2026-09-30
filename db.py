@@ -1,13 +1,8 @@
-"""SQLite schema and access for NekoCTI's local archive.
+"""SQLite schema and access for NekoCTI's archive.
 
-Schema is deliberately generic on the source side (a `sources` table, not
-THN-specific fields) so more feeds slot in later without a rewrite -- see
-the vault note's own stated design goal.
-
-Dedup uses a layered key rather than trusting one field alone (a real
-finding from the 16 September 2026 research pass): normalized link, the
-feed's own guid, and a content hash, since relying on raw link comparison
-alone measurably misses real duplicates.
+The source side is generic (a `sources` table, no source-specific columns),
+so new feeds slot in without a rewrite. Dedup is layered: normalized link,
+the feed's guid, and a content hash, since the link alone misses duplicates.
 """
 
 from __future__ import annotations
@@ -88,15 +83,8 @@ CREATE TABLE IF NOT EXISTS attack_techniques (
     confidence TEXT
 );
 
--- Real public PoC-exploit availability per real CVE already captured --
--- an enrichment lookup (like NVD/EPSS were scoped to be), not a
--- standalone article source, since there's no "new PoC article" to
--- ingest, only "does a public PoC exist for this CVE" against a
--- CVE-keyed lookup. `poc_checks` tracks which CVEs have been checked and
--- when, separate from `cve_pocs` itself, so "checked, zero found" is a
--- real distinct state from "not checked yet" -- without it, both would
--- look identical (no rows in cve_pocs), and a CVE with genuinely no
--- public PoC would get needlessly re-checked forever.
+-- Public PoC repos per captured CVE (pocs.py). poc_checks records when each
+-- CVE was checked, so "checked, none found" differs from "not checked yet".
 CREATE TABLE IF NOT EXISTS cve_pocs (
     id INTEGER PRIMARY KEY,
     cve_id TEXT NOT NULL,
@@ -113,17 +101,9 @@ CREATE TABLE IF NOT EXISTS poc_checks (
     checked_at TEXT NOT NULL
 );
 
--- Real per-CVE MITRE ATT&CK technique tags, two honest confidence tiers
--- (see cve_attack.py for the real research behind this split): "expert"
--- rows come from MITRE's own Center for Threat-Informed Defense KEV-to-
--- ATT&CK mapping (real cited analysis, but only 36 real overlaps against
--- NekoCTI's captured archive as of 17 September 2026); "llm" rows are
--- NekoCTI's own local classification of a CVE's own narrow description
--- text, run only where no expert mapping exists. Never blended silently -
--- confidence is always stored and always shown. `cve_attack_checks` marks
--- a CVE done once classified by either tier - unlike `poc_checks`, there's
--- no recheck window, since a CVE's own real nature doesn't change over
--- time the way PoC availability can.
+-- Per-CVE ATT&CK tags in two confidence tiers (cve_attack.py): "expert" from
+-- MITRE CTID's KEV mapping, "llm" from local classification. Never blended.
+-- cve_attack_checks marks a CVE done by either tier; no recheck window.
 CREATE TABLE IF NOT EXISTS cve_attack_techniques (
     id INTEGER PRIMARY KEY,
     cve_id TEXT NOT NULL,
@@ -140,24 +120,10 @@ CREATE TABLE IF NOT EXISTS cve_attack_checks (
     checked_at TEXT NOT NULL
 );
 
--- Real full-text search, not a LIKE '%term%' scan -- confirmed FTS5 is
--- compiled into this Python's sqlite3 module before relying on it. The
--- "external content" pattern (content='articles') keeps the real text in
--- `articles` itself as the single source of truth; the three triggers
--- below just keep this index in sync with it, so a search never returns
--- stale text after an edit.
--- Per-CVE enrichment, 22 September 2026. One row per CVE ID, filled by
--- enrich.py from three real lookups, kept apart from cve_mentions.cvss_score
--- (which is whatever an article's own text claimed) so the two never
--- overwrite each other and the dashboard can say where a score came from:
---   NVD   -- the official CVSS base score, severity, vector and CWE
---   EPSS  -- FIRST.org's predicted probability of exploitation, and its
---            percentile against every scored CVE
---   KEV   -- membership of CISA's Known Exploited Vulnerabilities catalog,
---            which is confirmed real-world exploitation, not a prediction
--- The checked_at columns are separate because the three refresh at very
--- different rates: EPSS changes daily, NVD rarely after analysis, KEV only
--- when CISA adds an entry.
+-- Per-CVE enrichment (enrich.py): NVD severity, EPSS prediction and CISA KEV
+-- membership. Kept apart from cve_mentions.cvss_score, which is whatever an
+-- article claimed, so the dashboard can say where a score came from. Each
+-- source has its own checked_at because they refresh at different rates.
 CREATE TABLE IF NOT EXISTS cve_scores (
     cve_id TEXT PRIMARY KEY,
     nvd_base_score REAL,
@@ -179,9 +145,7 @@ CREATE TABLE IF NOT EXISTS cve_scores (
     kev_checked_at TEXT
 );
 
--- Which CVE a piece of coverage claims is being exploited in the wild, and
--- where that claim came from. Article-level flags were too blunt: a monthly
--- patch roundup mentions ninety CVEs and reports two as exploited.
+-- Which CVE a piece of coverage claims is exploited, and from which article.
 CREATE TABLE IF NOT EXISTS cve_exploit_reports (
     cve_id TEXT NOT NULL,
     article_id INTEGER NOT NULL REFERENCES articles(id),
@@ -189,6 +153,8 @@ CREATE TABLE IF NOT EXISTS cve_exploit_reports (
     PRIMARY KEY (cve_id, article_id)
 );
 
+-- Full-text search. External content: the text stays in articles, and the
+-- triggers keep the index in sync.
 CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(
     title, full_text, description, content='articles', content_rowid='id'
 );
@@ -211,9 +177,8 @@ CREATE TRIGGER IF NOT EXISTS articles_au AFTER UPDATE ON articles BEGIN
 END;
 """
 
-# Columns added after the table already existed in real installs -- ALTER
-# TABLE ADD COLUMN rather than a full migration framework, since this is a
-# single-file personal database, not a multi-tenant system.
+# Columns added after real installs existed: ALTER TABLE ADD COLUMN, no
+# migration framework for a single-file personal database.
 _MIGRATIONS = [
     ("articles", "is_breach", "INTEGER NOT NULL DEFAULT 0"),
     ("articles", "attack_classified_at", "TEXT"),
@@ -237,25 +202,9 @@ def init_db() -> None:
             existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
             if column not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
-        # The sync triggers only fire on inserts/updates from here forward
-        # -- a fresh articles_fts table needs a one-time backfill against
-        # whatever real rows already existed before it did.
-        #
-        # A real bug was found here, 16 September 2026: `SELECT COUNT(*)
-        # FROM articles_fts` is NOT a reliable "is the index actually
-        # built" check for an external-content table -- that query (no
-        # MATCH involved) is served by live pass-through to the real
-        # `articles` table via the rowid mapping, not by the FTS5 inverted
-        # index, so it reports the full real row count immediately after
-        # the table is created, before any indexing has happened at all.
-        # That made the old `fts_count < real_count` check false from the
-        # very first run, silently skipping the rebuild an index-backed
-        # MATCH query actually needs -- confirmed live: `articles_fts`
-        # reported all 277 real rows while `articles_fts_idx` (the real
-        # inverted index shadow table) had zero, and every MATCH query
-        # returned nothing despite the content being genuinely present.
-        # Checking the real shadow index table directly is the correct
-        # signal instead.
+        # A fresh FTS table needs a one-time backfill. COUNT(*) on an
+        # external-content table passes through to `articles`, so it always
+        # looks full; the shadow index table is the real signal.
         idx_count = conn.execute("SELECT COUNT(*) c FROM articles_fts_idx").fetchone()["c"]
         real_count = conn.execute("SELECT COUNT(*) c FROM articles").fetchone()["c"]
         if idx_count == 0 and real_count > 0:
@@ -266,8 +215,8 @@ def init_db() -> None:
 
 
 def normalize_link(url: str) -> str:
-    """Strip scheme-irrelevant noise so the same article isn't re-stored
-    twice just because of a www./trailing-slash/query-string difference."""
+    """Drop www., trailing slashes, query and fragment, so the same article
+    isn't stored twice."""
     parts = urlsplit(url)
     netloc = parts.netloc.lower().removeprefix("www.")
     path = parts.path.rstrip("/")
@@ -299,19 +248,8 @@ def update_source_polled(conn: sqlite3.Connection, source_id: int,
 
 
 def article_exists(conn: sqlite3.Connection, normalized_link: str, guid: str | None) -> bool:
-    """Have we already ingested this article at all.
-
-    Checked on link+guid alone, deliberately not content_hash -- a real
-    bug found live, 16 September 2026: the hash can only be computed
-    AFTER a full-article fetch (or, as a cheap fallback, from the RSS
-    description), so checking against it before that fetch happens is a
-    chicken-and-egg problem. A first pass tried hashing the description
-    as a pre-check, but the row actually stored a hash of the full
-    article text once that fetch succeeded, so the two never matched on
-    a second poll -- the article got re-fetched and re-processed every
-    single run, and the real insert then hit the UNIQUE constraint and
-    crashed instead of being skipped cleanly.
-    """
+    """Link and guid only: the content hash needs the full-article fetch this
+    check exists to avoid."""
     row = conn.execute(
         "SELECT 1 FROM articles WHERE normalized_link = ? AND "
         "(guid = ? OR guid IS NULL) LIMIT 1",
@@ -325,9 +263,7 @@ def insert_article(conn: sqlite3.Connection, *, source_id: int, guid: str | None
                     fetched_at: str, description: str, full_text: str | None,
                     high_ticket: bool, is_breach: bool = False,
                     mentions_poc: bool = False, exploited_in_wild: bool = False) -> int | None:
-    """Returns the new row id, or None if this exact record already existed
-    (INSERT OR IGNORE as a defensive backstop behind article_exists's own
-    link+guid pre-check -- see that function's docstring)."""
+    """The new row id, or None if the record already existed."""
     chash = content_hash(full_text or description)
     nlink = normalize_link(link)
     cur = conn.execute(
@@ -343,51 +279,10 @@ def insert_article(conn: sqlite3.Connection, *, source_id: int, guid: str | None
     return cur.lastrowid if cur.rowcount else None
 
 
-def backfill_breach_flags(conn: sqlite3.Connection, breach_check) -> int:
-    """Re-scan every already-ingested article against the current breach
-    heuristic (breach_check(title, body_text) -> bool), since is_breach was
-    added after real articles already existed. Sets the flag both ways
-    (not just 0 -> 1) so re-running this after tuning the regex actually
-    corrects a previous false positive, not just adds new true positives.
-    Returns how many rows changed."""
-    rows = conn.execute("SELECT id, title, description, full_text, is_breach FROM articles").fetchall()
-    changed = 0
-    for row in rows:
-        body = row["full_text"] or row["description"] or ""
-        result = int(breach_check(row["title"], body))
-        if result != row["is_breach"]:
-            conn.execute("UPDATE articles SET is_breach = ? WHERE id = ?", (result, row["id"]))
-            changed += 1
-    conn.commit()
-    return changed
-
-
-def backfill_poc_mentions(conn: sqlite3.Connection, poc_mention_check) -> int:
-    """Same shape as backfill_breach_flags, for the same reason: mentions_poc
-    was added after real articles already existed, and re-running this
-    after tuning the regex should correct a real false positive, not just
-    add new true positives."""
-    rows = conn.execute("SELECT id, title, description, full_text, mentions_poc FROM articles").fetchall()
-    changed = 0
-    for row in rows:
-        body = row["full_text"] or row["description"] or ""
-        result = int(poc_mention_check(row["title"], body))
-        if result != row["mentions_poc"]:
-            conn.execute("UPDATE articles SET mentions_poc = ? WHERE id = ?", (result, row["id"]))
-            changed += 1
-    conn.commit()
-    return changed
-
-
 def backfill_exploited_in_wild(conn: sqlite3.Connection, evidence_fn) -> dict:
-    """Rescans stored articles for reported real-world exploitation, writing
-    both the per-CVE claims and the article-level flag.
-
-    Same shape as backfill_poc_mentions and for the same reason: this was
-    added on 22 September 2026, after thousands of real articles already
-    existed, and re-running it after tuning the pattern has to be able to
-    remove a false positive as well as add a true one -- so each article's
-    previous claims are cleared before its current ones are written."""
+    """Rescan stored articles for reported exploitation, writing the per-CVE
+    claims and the article flag. Each article's old claims are cleared first,
+    so a tuned pattern can remove a false positive as well as add one."""
     rows = conn.execute(
         "SELECT id, title, description, full_text, exploited_in_wild FROM articles"
     ).fetchall()
@@ -414,22 +309,16 @@ def backfill_exploited_in_wild(conn: sqlite3.Connection, evidence_fn) -> dict:
     return stats
 
 
-# Sources whose ingesters attach exactly one CVE per article on purpose
-# (kev.py, ghsa.py) and never run the text extractor, so a text re-scan must
-# leave them alone. Names must match their db.upsert_source() calls.
+# Sources whose ingesters attach exactly one CVE per article (kev.py, ghsa.py)
+# and never run the text extractor, so a text re-scan leaves them alone.
+# Names must match their db.upsert_source() calls.
 STRUCTURED_SOURCES = ("CISA KEV", "GitHub Security Advisories")
 
 
 def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn, high_ticket_fn) -> dict:
-    """Re-scan stored articles with the current CVE extractor and add any
-    mention it now finds that isn't stored yet.
-
-    Added 23 September 2026 when the extractor learned typographic dashes and
-    lowercase. Unlike the flag backfills above, this only ever adds: an
-    existing mention (and its CVSS score) is never deleted or rewritten, and
-    high_ticket is only ever raised, same as refresh_high_ticket_from_scores.
-    Reads the same text ingest does (full_text, else description) and skips
-    STRUCTURED_SOURCES."""
+    """Re-scan stored articles with the current CVE extractor and add any new
+    mention. Only ever adds: existing mentions and scores are kept, and
+    high_ticket is only raised."""
     existing: dict[int, set[str]] = {}
     for row in conn.execute("SELECT article_id, cve_id FROM cve_mentions"):
         existing.setdefault(row["article_id"], set()).add(row["cve_id"])
@@ -519,8 +408,7 @@ def insert_article_images(conn: sqlite3.Connection, article_id: int,
 
 
 def articles_needing_attack_classification(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
-    """Real content only -- an article with no full text and no real
-    description has nothing for the model to classify against."""
+    """Unclassified articles that have some text to classify."""
     return conn.execute(
         "SELECT id, title, full_text, description FROM articles "
         "WHERE attack_classified_at IS NULL "
@@ -545,16 +433,8 @@ def insert_attack_techniques(conn: sqlite3.Connection, article_id: int,
 
 
 def search_articles(conn: sqlite3.Connection, query: str, limit: int = 100) -> list[sqlite3.Row]:
-    """Real full-text search via SQLite FTS5, ranked by relevance (FTS5's
-    own bm25-based `rank`) rather than by date -- a search result set
-    should surface the best match first, unlike every other view in this
-    app, which is chronological.
-
-    Malformed FTS5 query syntax (an unmatched quote, a bare operator
-    character) is caught and retried as one literal quoted phrase instead
-    of erroring the whole search over ordinary punctuation a user might
-    reasonably type into a search box.
-    """
+    """FTS5 search ranked by relevance. Malformed FTS syntax (a stray quote or
+    operator) is retried as one literal phrase."""
     sql = (
         "SELECT a.* FROM articles a JOIN articles_fts f ON f.rowid = a.id "
         "WHERE articles_fts MATCH ? ORDER BY rank LIMIT ?"
@@ -567,12 +447,8 @@ def search_articles(conn: sqlite3.Connection, query: str, limit: int = 100) -> l
 
 
 def cves_needing_poc_check(conn: sqlite3.Connection, recheck_after_hours: int) -> list[str]:
-    """Every real CVE NekoCTI has already captured, that either hasn't
-    been checked against the real PoC-in-GitHub lookup yet, or was last
-    checked long enough ago that a new PoC might have appeared since --
-    a CVE with zero public PoCs today can genuinely get one added later,
-    so "checked once" isn't checked forever, just not re-checked on every
-    single run."""
+    """Captured CVEs never checked for a PoC, or last checked long enough ago
+    that one may have appeared."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=recheck_after_hours)).isoformat()
     rows = conn.execute(
         "SELECT DISTINCT cm.cve_id FROM cve_mentions cm "
@@ -584,11 +460,8 @@ def cves_needing_poc_check(conn: sqlite3.Connection, recheck_after_hours: int) -
 
 
 def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict]) -> None:
-    """Replaces this CVE's known PoC repos with the real current set from
-    the lookup (a repo's star count changes over time, and a repo can be
-    deleted/made private) and marks the CVE as checked just now, whether
-    or not any real PoCs were found -- both are real, meaningful
-    outcomes."""
+    """Replace this CVE's PoC repos with the current set (stars change, repos
+    vanish) and mark it checked, whether or not any were found."""
     conn.execute("DELETE FROM cve_pocs WHERE cve_id = ?", (cve_id,))
     conn.executemany(
         "INSERT INTO cve_pocs (cve_id, repo_full_name, repo_url, description, stars, "
@@ -608,8 +481,7 @@ def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict]) ->
 
 
 def all_cve_ids(conn: sqlite3.Connection) -> list[str]:
-    """Every distinct CVE NekoCTI has captured, newest identifier first so a
-    limited enrichment run reaches this year's CVEs before older ones."""
+    """Every captured CVE, newest identifier first."""
     rows = conn.execute(
         "SELECT DISTINCT cve_id FROM cve_mentions ORDER BY cve_id DESC"
     ).fetchall()
@@ -617,14 +489,10 @@ def all_cve_ids(conn: sqlite3.Connection) -> list[str]:
 
 
 def cves_needing_nvd(conn: sqlite3.Connection, recheck_after_days: int, limit: int) -> list[str]:
-    """CVEs to ask NVD about next, in triage order rather than database
-    order, because NVD is rate-limited (5 requests per 30s without a key,
-    50 with one) and a run is always bounded by `limit`. Order: articles
-    already flagged high ticket, then CVEs matching the vendor watchlist,
-    then anything with no severity at all, then newest first. Never-checked
-    CVEs come before re-checks; a CVE analysed by NVD rarely changes, so
-    re-checks are slow (`recheck_after_days`) and only matter for entries
-    still awaiting analysis."""
+    """CVEs to ask NVD about next, in triage order because NVD is rate-limited
+    and a run is bounded by `limit`: never-checked first, then high ticket,
+    watchlist matches, no severity at all, newest. Re-checks only matter for
+    entries NVD hasn't finished analysing."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=recheck_after_days)).isoformat()
     rows = conn.execute(
         """
@@ -649,8 +517,7 @@ def cves_needing_nvd(conn: sqlite3.Connection, recheck_after_days: int, limit: i
 
 
 def cves_needing_epss(conn: sqlite3.Connection, recheck_after_hours: int) -> list[str]:
-    """EPSS is recomputed daily by FIRST.org and comes back in batches, so
-    every captured CVE is refreshed rather than a prioritised subset."""
+    """EPSS is recomputed daily and batched, so every captured CVE is due."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=recheck_after_hours)).isoformat()
     rows = conn.execute(
         "SELECT DISTINCT cm.cve_id FROM cve_mentions cm "
@@ -674,10 +541,9 @@ def _upsert_cve_score(conn: sqlite3.Connection, cve_id: str, values: dict) -> No
 
 
 def record_nvd_score(conn: sqlite3.Connection, cve_id: str, data: dict | None) -> None:
-    """Stores what NVD says about one CVE. `data` is None when NVD genuinely
-    has no record (a reserved or withdrawn identifier): that is still a real
-    answer, so the check timestamp is written and the score columns are left
-    empty, rather than retrying it on every future run."""
+    """What NVD says about one CVE. `data` is None when NVD has no record,
+    which is still an answer: the check time is written so it isn't retried
+    every run."""
     values = {"nvd_checked_at": datetime.now(timezone.utc).isoformat()}
     if data:
         values.update({
@@ -707,9 +573,8 @@ def record_epss_scores(conn: sqlite3.Connection, scores: dict[str, dict]) -> Non
 
 
 def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int:
-    """Marks every captured CVE present in CISA's catalog, and clears the
-    flag on any that is not, so a stale flag can't survive a catalog change.
-    Only CVEs NekoCTI has actually captured are touched."""
+    """Set the KEV flag on every captured CVE in the catalog and clear it on
+    any that isn't, so a stale flag can't survive a catalog change."""
     now = datetime.now(timezone.utc).isoformat()
     marked = 0
     for cve_id in all_cve_ids(conn):
@@ -726,13 +591,9 @@ def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int
 
 
 def get_freshness(conn: sqlite3.Connection) -> dict:
-    """How current the data actually is, for the dashboard's own header.
-
-    The archive is deliberately never pruned (Neko's call, 22 September
-    2026: at ~27MB it costs nothing, and old coverage is still evidence).
-    Freshness is therefore about the facts being re-checked, not about
-    throwing rows away, so this reports when each lookup last ran and how
-    much is still waiting."""
+    """How current the facts are: when each lookup last ran and how much is
+    still waiting. The archive is never pruned, so freshness means re-checked
+    facts, not fewer rows."""
     one = lambda sql: conn.execute(sql).fetchone()[0]
     return {
         "last_article_fetched_at": one("SELECT MAX(fetched_at) FROM articles"),
@@ -762,15 +623,9 @@ def get_cve_scores(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sq
 
 
 def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_floor: float) -> int:
-    """Re-flags articles as high ticket using facts the ingest-time rule
-    could not see:
-      - the article reports real exploitation in the wild
-      - a CVE it mentions is in CISA KEV (confirmed exploitation)
-      - NVD's official base score is 9.0+ (most captured CVEs never had a
-        score in the article text at all)
-      - a CVE it mentions is at or above the EPSS percentile floor
-        (predicted exploitation)
-    Only ever promotes an article; it never clears a flag another rule set."""
+    """Promote to high ticket on facts the ingest-time rule couldn't see:
+    reported exploitation, a KEV-listed CVE, NVD 9.0+, or an EPSS percentile
+    at or above the floor. Only ever promotes."""
     cur = conn.execute(
         """
         UPDATE articles SET high_ticket = 1
@@ -793,10 +648,7 @@ def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_fl
 
 
 def get_pocs_summary(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """One row per real CVE with at least one known public PoC, ranked by
-    how credible/active the most-starred repo looks -- a raw PoC count
-    alone doesn't distinguish one well-maintained exploit from five
-    abandoned forks of the same thing."""
+    """One row per CVE with a public PoC, most-starred first."""
     return conn.execute(
         "SELECT cve_id, COUNT(*) poc_count, MAX(stars) max_stars, "
         "MAX(repo_pushed_at) latest_pushed_at "
@@ -819,10 +671,8 @@ def get_checked_attack_cve_ids(conn: sqlite3.Connection) -> set[str]:
 
 
 def get_poc_mention_cve_ids(conn: sqlite3.Connection) -> set[str]:
-    """The exact same focused-article scoping the POCS tab's mention-only
-    signal uses (see server.py's get_pocs_overview) - kept here too so the
-    ATT&CK classification pass targets the identical real CVE set Neko
-    sees in that tab, not a looser approximation."""
+    """The POCS tab's mention-only CVEs: PoC-mentioning articles naming 5 or
+    fewer CVEs (a roundup can't be tied to any one of its hundreds)."""
     rows = conn.execute(
         "SELECT DISTINCT cm.cve_id FROM cve_mentions cm JOIN articles a ON a.id = cm.article_id "
         "WHERE a.mentions_poc = 1 "
@@ -833,10 +683,8 @@ def get_poc_mention_cve_ids(conn: sqlite3.Connection) -> set[str]:
 
 
 def get_cve_title(conn: sqlite3.Connection, cve_id: str) -> str | None:
-    """Real vulnerability description for a CVE, not the bare ID: a GHSA
-    advisory's own title already IS the description (see ghsa.py's
-    real_title()), preferred over any other article that just mentions the
-    CVE in passing. Falls back to the most recent article's title."""
+    """A description for a CVE: a GHSA advisory's title if there is one, else
+    the newest article title that mentions it."""
     row = conn.execute(
         "SELECT a.title FROM cve_mentions cm "
         "JOIN articles a ON a.id = cm.article_id "
@@ -851,8 +699,7 @@ def get_cve_title(conn: sqlite3.Connection, cve_id: str) -> str | None:
 def insert_cve_attack_techniques(conn: sqlite3.Connection, cve_id: str,
                                   rows: list[tuple]) -> None:
     """Each row is (technique_id, technique_name, confidence, mapping_type,
-    evidence, source_url) - the latter three are None for the LLM tier,
-    which has no mapping_type/citation to offer, only a technique guess."""
+    evidence, source_url); the last three are None for the LLM tier."""
     conn.executemany(
         "INSERT INTO cve_attack_techniques "
         "(cve_id, technique_id, technique_name, confidence, mapping_type, evidence, source_url) "
@@ -872,10 +719,8 @@ def mark_cve_attack_checked(conn: sqlite3.Connection, cve_id: str) -> None:
 
 
 def cves_needing_llm_attack_classification(conn: sqlite3.Connection, limit: int) -> list[str]:
-    """Real POCS-tab-eligible CVEs (a real public repo, or a focused
-    non-roundup mention) not yet covered by either confidence tier -
-    the expert pass always runs first, so anything left here genuinely
-    has no expert mapping available."""
+    """POCS-tab CVEs not yet covered by either tier. The expert pass runs
+    first, so anything left has no expert mapping."""
     eligible = {r["cve_id"] for r in get_pocs_summary(conn)} | get_poc_mention_cve_ids(conn)
     checked = get_checked_attack_cve_ids(conn)
     remaining = sorted(eligible - checked)
@@ -892,7 +737,7 @@ def get_cve_attack_techniques(conn: sqlite3.Connection, cve_id: str) -> list[sql
 
 
 def get_cve_attack_techniques_bulk(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, list[dict]]:
-    """Bulk fetch for the POCS overview list, avoiding one query per row."""
+    """Bulk fetch for the POCS overview, one query for every row."""
     if not cve_ids:
         return {}
     placeholders = ",".join("?" for _ in cve_ids)

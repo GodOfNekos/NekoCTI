@@ -1,30 +1,16 @@
-"""Per-CVE enrichment: official severity, predicted exploitation, and
-confirmed real-world exploitation, for CVEs NekoCTI has already captured.
+"""Per-CVE enrichment for CVEs NekoCTI has already captured, keyed on CVE ID
+like pocs.py:
 
-Same shape as pocs.py: lookups keyed on CVE ID, not polled sources. There is
-no "new severity article" to ingest, only "what is actually known about this
-CVE". Three real lookups, each chosen because it answers a different question:
+  NVD 2.0   -- the official CVSS base score, severity, vector and CWE. One
+               CVE per request, rate-limited (5 per 30s unkeyed, 50 with a
+               key), so runs are bounded by --limit in triage order.
+  EPSS      -- FIRST.org's probability of exploitation in the next 30 days,
+               and its percentile. Batched, recomputed daily.
+  CISA KEV  -- membership of the Known Exploited Vulnerabilities catalog:
+               confirmed exploitation, the strongest signal of the three.
 
-  NVD 2.0   -- the official CVSS base score, severity, vector and CWE. Most
-               captured CVEs have no score at all otherwise: only the few
-               whose article text happened to quote one (280 of 4,102 when
-               this was built). Single-CVE queries, and rate-limited: 5
-               requests per rolling 30s without an API key, 50 with one, so
-               a run is always bounded by --limit and ordered by triage
-               priority rather than database order.
-  EPSS      -- FIRST.org's predicted probability that a CVE will be
-               exploited in the next 30 days, plus its percentile against
-               every scored CVE. Batched (one request covers many CVEs) and
-               recomputed daily, so every captured CVE is refreshed.
-  CISA KEV  -- membership of the Known Exploited Vulnerabilities catalog.
-               This is confirmed exploitation in the wild, not a prediction,
-               and it is the strongest signal of the three. kev.py already
-               ingests recent KEV entries as articles; this marks the flag
-               on any captured CVE, however old the entry.
-
-The distinction matters when reading the dashboard: KEV means it is being
-exploited, EPSS means it probably will be, a public PoC (pocs.py) means the
-code to do it exists.
+KEV means it is being exploited, EPSS that it probably will be, and a public
+PoC (pocs.py) that the code to do it exists.
 """
 
 from __future__ import annotations
@@ -38,31 +24,31 @@ import urllib.request
 from datetime import datetime, timezone
 
 import db
+import extract
 
 NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 EPSS_URL = "https://api.first.org/data/v1/epss"
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 
 REQUEST_TIMEOUT_S = 30
-EPSS_BATCH_SIZE = 100          # the API takes a comma-separated list; 100 keeps the URL sane
+EPSS_BATCH_SIZE = 100          # CVEs per request, keeping the URL sane
 EPSS_RECHECK_HOURS = 20        # EPSS is recomputed daily
-NVD_RECHECK_DAYS = 7           # only matters for CVEs NVD has not finished analysing
+NVD_RECHECK_DAYS = 7           # only for CVEs NVD hasn't finished analysing
 NVD_DEFAULT_LIMIT = 200
 
-# NVD's published limits: 5 requests per rolling 30s unkeyed, 50 with a key.
-# The sleeps sit just inside those, because being throttled costs more time
-# than pacing does.
+# Just inside NVD's limits, because being throttled costs more than pacing.
 NVD_DELAY_WITH_KEY_S = 0.7
 NVD_DELAY_NO_KEY_S = 6.5
 
-# An article is promoted to high ticket when a CVE it mentions is at or above
-# this EPSS percentile. 0.95 is the top 5% most likely to be exploited.
+# The top 5% most likely to be exploited promotes an article to high ticket.
 HIGH_TICKET_EPSS_PERCENTILE = 0.95
 
 
-def _get_json(url: str, headers: dict | None = None):
+def get_json(url: str, headers: dict | None = None, timeout: float = REQUEST_TIMEOUT_S):
+    """GET and parse JSON. Every API module fetches through this; HTTP errors
+    propagate so callers can tell a 404 from a failure."""
     req = urllib.request.Request(url, headers={"User-Agent": "NekoCTI", **(headers or {})})
-    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -72,18 +58,13 @@ def nvd_api_key() -> str | None:
 
 
 def fetch_nvd(cve_id: str, api_key: str | None) -> tuple[dict | None, bool]:
-    """Returns (record, answered). `answered` is False only when the lookup
-    itself failed (network, throttling, a 503), so a transient error is never
-    recorded as "NVD has nothing on this CVE" -- the same distinction pocs.py
-    makes. A real empty result returns (None, True).
-
-    NVD returns several metric families for one CVE (CVSS 4.0, 3.1, 3.0, and
-    non-CVSS decision points). The primary NVD-authored CVSS score is
-    preferred, then any other provider's, newest CVSS version first.
+    """(record, answered). answered is False only when the lookup itself
+    failed, so a transient error is never recorded as "NVD has nothing".
+    The primary NVD-authored CVSS score is preferred, newest version first.
     """
     headers = {"apiKey": api_key} if api_key else {}
     try:
-        data = _get_json(f"{NVD_URL}?cveId={urllib.parse.quote(cve_id)}", headers)
+        data = get_json(f"{NVD_URL}?cveId={urllib.parse.quote(cve_id)}", headers)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None, True
@@ -132,15 +113,15 @@ def fetch_nvd(cve_id: str, api_key: str | None) -> tuple[dict | None, bool]:
 
 
 def fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
-    """EPSS for a batch of CVEs. A CVE with no EPSS score simply isn't in the
-    response (very new or rejected identifiers), which is a real answer."""
+    """EPSS for a batch of CVEs. A CVE missing from the response has no score
+    (very new or rejected), which is an answer."""
     out: dict[str, dict] = {}
     for i in range(0, len(cve_ids), EPSS_BATCH_SIZE):
         batch = cve_ids[i:i + EPSS_BATCH_SIZE]
         try:
-            data = _get_json(f"{EPSS_URL}?cve={','.join(batch)}")
+            data = get_json(f"{EPSS_URL}?cve={','.join(batch)}")
         except Exception:
-            continue  # leave this batch unchecked; the next run retries it
+            continue  # the next run retries this batch
         for row in data.get("data", []):
             try:
                 out[row["cve"]] = {
@@ -154,44 +135,39 @@ def fetch_epss(cve_ids: list[str]) -> dict[str, dict]:
     return out
 
 
+KEV_CACHE_S = 600
+_kev_cache: tuple[float, dict] | None = None
+
+
 def fetch_kev_catalog() -> dict[str, dict] | None:
-    """The whole KEV catalog, keyed by CVE ID. One request covers every
-    entry, so there is no reason to page or filter by date here -- kev.py's
-    lookback window exists for article ingestion, not for this flag."""
+    """The whole KEV catalog keyed by CVE ID, or None if it can't be fetched.
+    Kept for 10 minutes, so a check's ingest (kev.py) and refresh share one
+    download."""
+    global _kev_cache
+    if _kev_cache and time.monotonic() - _kev_cache[0] < KEV_CACHE_S:
+        return _kev_cache[1]
     try:
-        data = _get_json(KEV_URL)
+        data = get_json(KEV_URL)
     except Exception:
         return None
-    return {v["cveID"]: v for v in data.get("vulnerabilities", []) if v.get("cveID")}
+    catalog = {v["cveID"]: v for v in data.get("vulnerabilities", []) if v.get("cveID")}
+    _kev_cache = (time.monotonic(), catalog)
+    return catalog
 
 
-# EPSS is recalculated daily by FIRST.org. A score older than this is shown
-# with a stale marker in the dashboard rather than silently trusted; the next
-# run refreshes it.
+# An EPSS score older than this shows a stale marker; the next run refreshes it.
 EPSS_STALE_AFTER_DAYS = 2
 
-# How many NVD lookups a post-ingest refresh does. Small on purpose: this
-# runs on every "run check now", and its job is to give the CVEs that just
-# arrived a severity, not to backfill history. A real backfill is an
-# explicit `enrich --limit N`.
+# NVD lookups per post-ingest refresh: enough to score the CVEs that just
+# arrived, not a backfill (that's an explicit `enrich --limit N`).
 POST_INGEST_NVD_LIMIT = 40
 
 
 def refresh_after_ingest(conn) -> dict:
-    """The freshness pass that runs at the end of every check, so what the
-    dashboard shows has been re-verified rather than just re-listed.
-
-    Cheap by design: EPSS is batched (one request per 100 CVEs) and the KEV
-    catalog is a single request, so the facts that change daily are always
-    current. NVD is bounded to POST_INGEST_NVD_LIMIT because it is one
-    rate-limited request per CVE; the priority order in
-    db.cves_needing_nvd() means the CVEs that just arrived, and anything
-    already flagged high ticket, get theirs first.
-    """
-    import extract  # local import: keeps ingest's import graph unchanged
-
-    # First, so any mention the current extractor newly finds is scored and
-    # checked for exploitation reporting in this same pass.
+    """The pass at the end of every check, so the dashboard's facts are
+    re-verified, not just re-listed. EPSS and KEV are cheap and always run;
+    NVD is bounded, newest arrivals and high ticket first."""
+    # First, so newly found mentions are scored in this same pass.
     mentions = db.backfill_cve_mentions(conn, extract.extract_cves, extract.is_high_ticket)
     stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
     summary = enrich(conn, nvd_limit=POST_INGEST_NVD_LIMIT)

@@ -1,29 +1,21 @@
-"""NekoCTI local dashboard backend.
-
-Python stdlib http.server, no framework - matches the pattern this
-environment already uses for 3D Model Terminal's own local backend, and
-this environment's broader preference for minimal dependencies. Binds to
-127.0.0.1 only: this is a personal, single-user tool, reachable over
-Tailscale/localhost like every other internal tool built here, never a
-publicly exposed port.
-
-Reuses db.py/extract.py directly rather than reimplementing any of the
-data-access logic already proven by the ingestion pipeline.
+"""NekoCTI dashboard backend: Python's standard-library HTTP server, bound
+to 127.0.0.1. In the container, `tailscale serve` is the only way in.
+Reuses db.py and extract.py for all data access.
 """
 
 from __future__ import annotations
 
 import json
-import re
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 import attack
 import db
-import extract
+import enrich
 import ingest
 
 HERE = Path(__file__).resolve().parent
@@ -41,10 +33,9 @@ def _cutoff_iso(range_key: str) -> str | None:
 
 
 def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int) -> dict:
-    """One CVE as the dashboard needs it: what the article claimed, what NVD
-    says, and the two separate exploitation signals -- KEV (confirmed, from
-    CISA) and EPSS (predicted). `exploit_reports` counts captured articles
-    that report this CVE as exploited, which often precedes a KEV entry."""
+    """One CVE for the dashboard: the article's claimed score, NVD's, and the
+    two exploitation signals, KEV (confirmed) and EPSS (predicted).
+    `exploit_reports` counts captured articles reporting it exploited."""
     s = score_row
     return {
         "id": cve_id,
@@ -59,9 +50,7 @@ def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int) -> dic
         "epss": s["epss_score"] if s else None,
         "epss_percentile": s["epss_percentile"] if s else None,
         "epss_date": s["epss_date"] if s else None,
-        # EPSS is recalculated daily, so an old score is a real caveat
-        # rather than a fact. Marked, never hidden; the next check refreshes
-        # it.
+        # EPSS is recalculated daily, so an old score is marked, never hidden.
         "epss_stale": _is_stale(s["epss_date"]) if s else False,
         "exploit_reports": report_count,
     }
@@ -74,12 +63,16 @@ def _is_stale(epss_date: str | None) -> bool:
         d = datetime.fromisoformat(epss_date).date()
     except ValueError:
         return False
-    return (datetime.now(timezone.utc).date() - d).days > enrich_stale_days()
+    return (datetime.now(timezone.utc).date() - d).days > enrich.EPSS_STALE_AFTER_DAYS
 
 
-def enrich_stale_days() -> int:
-    import enrich as enrich_mod
-    return enrich_mod.EPSS_STALE_AFTER_DAYS
+def _http_url(url: str, base: str = "") -> str | None:
+    """url made absolute against base, if it's http(s); else None. Feeds hand
+    over relative image paths and, in principle, javascript: links."""
+    if not url:
+        return None
+    full = urljoin(base, url)
+    return full if urlparse(full).scheme in ("http", "https") else None
 
 
 def _serialize_article(conn, row, include_body: bool = False) -> dict:
@@ -99,17 +92,14 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "SELECT DISTINCT campaign_name FROM campaign_matches WHERE article_id = ?",
         (row["id"],),
     ).fetchall()
-    # Enrichment facts per CVE (enrich.py): official severity, CISA KEV
-    # membership (confirmed exploitation) and the EPSS percentile
-    # (predicted). The article's own claimed score stays as `cvss`, so the
-    # two are never confused.
+    # The article's own claimed score stays as `cvss`, apart from NVD's.
     _cve_ids = [c["cve_id"] for c in cves]
     _scores = db.get_cve_scores(conn, _cve_ids)
     _reports = db.get_exploit_reports(conn, _cve_ids)
     data = {
         "id": row["id"],
         "title": row["title"],
-        "link": row["link"],
+        "link": _http_url(row["link"]),
         "published_at": row["published_at"],
         "fetched_at": row["fetched_at"],
         "high_ticket": bool(row["high_ticket"]),
@@ -123,16 +113,14 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "campaigns": [c["campaign_name"] for c in campaigns],
     }
     if include_body:
-        # Read in-dashboard: the real full-article text when we fetched
-        # one (THN), falling back to the RSS/KEV description otherwise --
-        # this is what makes the dashboard the actual place to read the
-        # content, not just a launchpad to the original site.
+        # The fetched full text, else the feed or KEV description: the
+        # dashboard is where articles are read.
         data["body"] = row["full_text"] or row["description"] or "(no content captured)"
         images = conn.execute(
             "SELECT image_url FROM article_images WHERE article_id = ? ORDER BY position",
             (row["id"],),
         ).fetchall()
-        data["images"] = [i["image_url"] for i in images]
+        data["images"] = [u for i in images if (u := _http_url(i["image_url"], row["link"]))]
     return data
 
 
@@ -203,10 +191,9 @@ def get_article_detail(article_id: int) -> dict | None:
 
 
 def get_attack_matrix() -> dict:
-    """Real tactics x techniques structure from MITRE's own data, with a
-    real count of how many captured articles map to each technique -- the
-    heatmap signal. Techniques with zero real matches still appear (the
-    point is seeing the whole framework, not just a filtered list)."""
+    """Tactics x techniques from MITRE's data, with how many articles map to
+    each technique. Unmatched techniques are included so the whole framework
+    shows."""
     catalog = attack.get_technique_catalog()
     tactics = attack.get_tactics()
 
@@ -264,26 +251,13 @@ def get_entity_articles(entity_name: str) -> dict:
 
 
 def get_pocs_overview() -> dict:
-    """Two real, distinct kinds of PoC evidence, not just one: a confirmed
-    public GitHub repo (nomi-sec/PoC-in-GitHub) is the strongest signal,
-    but real coverage NekoCTI has already ingested can also describe a
-    PoC/exploit that was never released as a public repo at all (a
-    researcher's own writeup, a privately-sold exploit, a brand-new CVE
-    the repo-lookup hasn't caught up to yet) - `extract.mentions_poc`
-    catches that from the article text itself. A CVE shows up here if
-    either kind of evidence exists, clearly labeled which."""
+    """CVEs with either kind of PoC evidence, labelled: a public GitHub repo
+    (nomi-sec/PoC-in-GitHub), or coverage that describes a PoC. mentions_poc
+    is an article-level flag, so a mention only counts from articles naming
+    5 or fewer CVEs; roundups cover 50 to 600."""
     conn = db.connect()
     try:
         repo_rows = {r["cve_id"]: r for r in db.get_pocs_summary(conn)}
-        # A real over-attribution bug found and fixed here, 16 September
-        # 2026: a monthly "Security Update Review" mentioning 621 distinct
-        # CVEs had its one real PoC-mention flag naively attributed to
-        # every single one of them, since mentions_poc is an article-level
-        # flag, not a per-CVE one. A roundup covering hundreds of CVEs
-        # can't be confidently tied to any specific one of them, so the
-        # mention signal here is scoped to articles discussing a real
-        # small, focused set of CVEs (5 or fewer) - a threshold chosen
-        # after finding real roundup articles routinely cover 50-600+.
         mention_rows = conn.execute(
             "SELECT cm.cve_id, COUNT(DISTINCT a.id) mention_count "
             "FROM cve_mentions cm JOIN articles a ON a.id = cm.article_id "
@@ -296,8 +270,6 @@ def get_pocs_overview() -> dict:
 
         cve_ids = set(repo_rows) | set(mention_counts)
         attack_techniques = db.get_cve_attack_techniques_bulk(conn, list(cve_ids))
-        # Severity and exploitation facts for the same set, fetched in two
-        # queries rather than per CVE inside the loop below.
         score_rows = db.get_cve_scores(conn, list(cve_ids))
         report_counts = db.get_exploit_reports(conn, list(cve_ids))
         cves = []
@@ -310,12 +282,8 @@ def get_pocs_overview() -> dict:
                 "SELECT COUNT(DISTINCT article_id) c FROM cve_mentions WHERE cve_id = ?",
                 (cve_id,),
             ).fetchone()
-            # Real vulnerability description, not just the bare CVE ID: a
-            # GHSA advisory's own title already IS the vulnerability
-            # description (see ghsa.py's real_title()), so that's preferred
-            # over any other article that happens to mention the CVE in
-            # passing; falls back to the most recent article title if no
-            # GHSA record exists for it.
+            # A GHSA advisory's title is the vulnerability description, so
+            # it's preferred over any article that mentions the CVE.
             title_row = conn.execute(
                 "SELECT a.title, a.published_at FROM cve_mentions cm "
                 "JOIN articles a ON a.id = cm.article_id "
@@ -421,41 +389,46 @@ def get_campaign_articles(campaign_name: str) -> dict:
         conn.close()
 
 
-def get_watchlist() -> dict:
-    return json.loads((HERE / "watchlist.json").read_text(encoding="utf-8"))
+# The editable configs, by URL: file and the one key it holds.
+_CONFIGS = {
+    "/api/watchlist": ("watchlist.json", "vendors"),
+    "/api/tags": ("tags.json", "entities"),
+    "/api/campaigns": ("campaigns.json", "campaigns"),
+}
+MAX_CONFIG_BYTES = 256 * 1024
 
 
-def put_watchlist(data: dict) -> None:
-    (HERE / "watchlist.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def get_tags() -> dict:
-    return json.loads((HERE / "tags.json").read_text(encoding="utf-8"))
-
-
-def put_tags(data: dict) -> None:
-    (HERE / "tags.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def get_campaigns() -> dict:
-    path = HERE / "campaigns.json"
+def read_config(url_path: str) -> dict:
+    name, key = _CONFIGS[url_path]
+    path = HERE / name
     if not path.exists():
-        return {"campaigns": []}
+        return {key: {} if key == "vendors" else []}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def put_campaigns(data: dict) -> None:
-    (HERE / "campaigns.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+def valid_config(url_path: str, data) -> bool:
+    """The shape extract.py relies on; anything else would break every later
+    ingest. Watchlist: {"vendors": {category: [term, ...]}}. Tags and
+    campaigns: {key: [{"name": str, "aliases": [str, ...]}, ...]}."""
+    _, key = _CONFIGS[url_path]
+    if not isinstance(data, dict) or set(data) != {key}:
+        return False
+    strs = lambda xs: isinstance(xs, list) and all(isinstance(x, str) for x in xs)
+    if key == "vendors":
+        return isinstance(data[key], dict) and all(isinstance(k, str) and strs(v) for k, v in data[key].items())
+    return isinstance(data[key], list) and all(
+        isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"].strip()
+        and strs(e.get("aliases", [])) and set(e) <= {"name", "aliases"}
+        for e in data[key])
 
 
-# --- Manual "run check now" ---
-# Real on-demand ingestion from the dashboard itself, Neko's explicit
-# request, mirroring TCG Price Tracker's own "Run price check now" button
-# - a lock guards against overlapping runs (this app's own ingest is much
-# faster than TCG's Playwright-based scraping, but still real network I/O
-# across 30+ sources, not instant), and the job runs in a background
-# thread so the triggering HTTP request returns immediately rather than
-# holding the connection open for however long the real run takes.
+def write_config(url_path: str, data: dict) -> None:
+    (HERE / _CONFIGS[url_path][0]).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+# --- Run check now ---
+# A background thread runs the ingest so the request returns at once, and a
+# lock stops two runs overlapping.
 
 _ingest_lock = threading.Lock()
 _ingest_state: dict = {
@@ -470,18 +443,14 @@ _ingest_state: dict = {
 def _run_ingest_job() -> None:
     try:
         results = ingest.run_all()
-        # Re-check the facts as well as fetching new articles, so the
-        # dashboard is current rather than merely longer: EPSS and the KEV
-        # catalog change daily, and CVEs that just arrived have no severity
-        # yet. Cheap parts always run; NVD is bounded (see enrich.py).
-        # A failure here must not lose a successful ingest, so it is
-        # reported separately rather than raised.
+        # Then re-check the facts (EPSS, KEV, new CVEs' severity), so the
+        # dashboard is current, not just longer. A failure here is reported
+        # separately and never loses a successful ingest.
         enrich_summary, enrich_error = None, None
         try:
-            import enrich as enrich_mod
             conn = db.connect()
             try:
-                enrich_summary = enrich_mod.refresh_after_ingest(conn)
+                enrich_summary = enrich.refresh_after_ingest(conn)
             finally:
                 conn.close()
         except Exception as e:
@@ -501,10 +470,8 @@ def _run_ingest_job() -> None:
 
 
 def start_ingest_run() -> bool:
-    """Returns False without starting anything if a run is already in
-    progress -- the real overlap guard, not just a UI-side disabled button
-    (a second browser tab, or a stale request retried by the client,
-    would otherwise still be able to kick off a real second run)."""
+    """False, starting nothing, if a run is already going. Server-side, so a
+    second tab or a retried request can't start a second run."""
     with _ingest_lock:
         if _ingest_state["running"]:
             return False
@@ -535,10 +502,9 @@ _STATIC_TYPES = {
     ".otf": "font/otf",
 }
 
-# The only files the page needs, by URL path. Everything else is a 404: the
+# The only files the page needs, by URL path; everything else is a 404. The
 # app folder also holds the database and, in the container, data/ with the
-# node's Tailscale keys, which the old serve-anything-under-HERE rule handed
-# to the whole tailnet (found 30 September 2026).
+# node's Tailscale keys (served to the whole tailnet until 30 September 2026).
 _STATIC_FILES = {
     "/": "index.html",
     "/index.html": "index.html",
@@ -547,10 +513,42 @@ _STATIC_FILES = {
     "/fonts/monofonto.otf": "fonts/monofonto.otf",
 }
 
+# On every response. Feed text is untrusted, so the page may only run its own
+# script and style; images may come from any https source.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; img-src 'self' https: data:; script-src 'self'; style-src 'self'; "
+        "connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+
+# Every write must carry this header. A plain cross-site form or fetch can't
+# add one without a CORS preflight, which this server never answers.
+WRITE_HEADER = "X-NekoCTI"
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        pass  # keep the console readable; real errors still raise
+        """One line per request to stderr (the container log): who, from
+        which tailnet address, what. Never bodies."""
+        headers = getattr(self, "headers", None) or {}   # absent on a malformed request line
+        who = headers.get("Tailscale-User-Login", "-")
+        where = headers.get("X-Forwarded-For", self.client_address[0])
+        sys.stderr.write(f"{self.log_date_time_string()} {where} {who} {fmt % args}\n")
+
+    def end_headers(self) -> None:
+        for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        super().end_headers()
+
+    def _write_allowed(self) -> bool:
+        if self.headers.get(WRITE_HEADER) == "1":
+            return True
+        self.send_error(403, "missing write header")
+        return False
 
     def _json(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -598,14 +596,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(detail)
             return
-        if parsed.path == "/api/watchlist":
-            self._json(get_watchlist())
-            return
-        if parsed.path == "/api/tags":
-            self._json(get_tags())
-            return
-        if parsed.path == "/api/campaigns":
-            self._json(get_campaigns())
+        if parsed.path in _CONFIGS:
+            self._json(read_config(parsed.path))
             return
         if parsed.path == "/api/attack/matrix":
             self._json(get_attack_matrix())
@@ -640,25 +632,32 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_PUT(self) -> None:
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length) or b"{}")
-
-        if self.path == "/api/watchlist":
-            put_watchlist(body)
-            self._json({"ok": True})
+        if self.path not in _CONFIGS:
+            self.send_error(404)
             return
-        if self.path == "/api/tags":
-            put_tags(body)
-            self._json({"ok": True})
+        if not self._write_allowed():
             return
-        if self.path == "/api/campaigns":
-            put_campaigns(body)
-            self._json({"ok": True})
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = -1
+        if not 0 < length <= MAX_CONFIG_BYTES:
+            self.send_error(413 if length > MAX_CONFIG_BYTES else 400)
             return
-        self.send_error(404)
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            body = None
+        if not valid_config(self.path, body):
+            self.send_error(400, "not a valid config")
+            return
+        write_config(self.path, body)
+        self._json({"ok": True})
 
     def do_POST(self) -> None:
         if self.path == "/api/ingest/run":
+            if not self._write_allowed():
+                return
             started = start_ingest_run()
             if started:
                 self._json({"ok": True, "started": True})

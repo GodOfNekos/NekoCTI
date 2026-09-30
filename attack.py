@@ -1,27 +1,14 @@
 """MITRE ATT&CK technique classification and matrix data.
 
-Real ATT&CK data, not a hand-built list: the enterprise STIX bundle
-(`mitre-attack/attack-stix-data`, downloaded 16 September 2026) loaded via
-the official `mitreattack-python` library - 697 real techniques, 15 real
-tactics, checked directly before building anything against it.
-
-Classification calls the local Ollama model (qwen3.8:27b, already proven
-elsewhere in this environment - free, no API key, no new dependency on a
-hosted provider) rather than a hosted LLM, Neko's explicit call. The model
-is asked to name technique IDs from its own knowledge of ATT&CK, not given
-the full 697-technique catalog in every prompt (that's a real token-cost
-problem, and ATT&CK is well-documented enough that a capable model has
-real baseline familiarity with the common techniques an SOC-facing article
-would describe). Every ID the model returns is then validated against the
-real STIX catalog before being stored - a hallucinated or malformed ID is
-silently dropped, never trusted as ground truth. This is the same
-"evidence only, never guess" discipline applied everywhere else in this
-project, just applied to model output instead of a web page.
+Technique and tactic data come from MITRE's enterprise STIX bundle via
+mitreattack-python. Classification asks the local Ollama model for technique
+IDs from its own knowledge (the full catalog in every prompt would be too
+many tokens), then validates every returned ID against the STIX catalog:
+a hallucinated or deprecated ID is dropped, never stored.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from pathlib import Path
@@ -32,10 +19,7 @@ from mitreattack.stix20 import MitreAttackData
 HERE = Path(__file__).resolve().parent
 STIX_PATH = HERE / "enterprise-attack.json"
 
-# Overridable so a containerized deploy can point this at the host's own
-# Ollama instance via `host.docker.internal` instead of `localhost`, which
-# means something different from inside a container. Bare-metal runs (the
-# default here) are unaffected.
+# In the container this points at the host's Ollama via host.docker.internal.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 CLASSIFY_MODEL = "qwen3.8:27b"
 NUM_CTX = 65536
@@ -58,9 +42,8 @@ def _load() -> MitreAttackData:
 
 
 def get_technique_catalog() -> dict[str, dict]:
-    """Returns {technique_id: {"name": str, "tactics": [shortname, ...]}} for
-    every real, non-deprecated/non-revoked enterprise technique. Cached -
-    this file is 51MB and re-parsing it per call would be real, avoidable cost."""
+    """{technique_id: {"name", "tactics": [shortname, ...]}} for every
+    current enterprise technique. Cached: the bundle is 51MB."""
     if "catalog" in _cache:
         return _cache["catalog"]
 
@@ -80,8 +63,7 @@ def get_technique_catalog() -> dict[str, dict]:
 
 
 def get_tactics() -> list[dict]:
-    """Returns real tactics ordered by ATT&CK's own kill-chain order, each
-    as {"shortname": str, "name": str}."""
+    """Tactics as {"shortname", "name"}, sorted by shortname."""
     if "tactics" in _cache:
         return _cache["tactics"]
 
@@ -110,13 +92,8 @@ ARTICLE TEXT:
 
 
 async def classify_article(title: str, body: str) -> list[tuple[str, str, str]]:
-    """Returns validated (technique_id, technique_name, confidence) triples.
-
-    confidence is currently a fixed string ("model") rather than a real
-    scored value -- this first version asks the model for a yes/no per
-    technique, not a calibrated probability. Worth revisiting if the
-    classification turns out too noisy in practice.
-    """
+    """Validated (technique_id, technique_name, confidence) triples. The
+    confidence is a fixed "model", not a calibrated score."""
     catalog = get_technique_catalog()
     prompt = _CLASSIFY_PROMPT.format(title=title, body=body[:20000])
 
@@ -139,10 +116,7 @@ async def classify_article(title: str, body: str) -> list[tuple[str, str, str]]:
         if tech_id in seen:
             continue
         seen.add(tech_id)
-        # Validated against the real catalog -- a hallucinated ID (the
-        # model inventing a plausible-looking T-number, or citing a
-        # deprecated/revoked one) is dropped here, never stored.
-        entry = catalog.get(tech_id)
+        entry = catalog.get(tech_id)   # an ID not in the catalog is dropped
         if entry is not None:
             results.append((tech_id, entry["name"], "model"))
 
