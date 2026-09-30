@@ -535,6 +535,18 @@ _STATIC_TYPES = {
     ".otf": "font/otf",
 }
 
+# The only files the page needs, by URL path. Everything else is a 404: the
+# app folder also holds the database and, in the container, data/ with the
+# node's Tailscale keys, which the old serve-anything-under-HERE rule handed
+# to the whole tailnet (found 30 September 2026).
+_STATIC_FILES = {
+    "/": "index.html",
+    "/index.html": "index.html",
+    "/style.css": "style.css",
+    "/app.js": "app.js",
+    "/fonts/monofonto.otf": "fonts/monofonto.otf",
+}
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -549,10 +561,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _static(self, rel_path: str) -> None:
-        path = (HERE / rel_path.lstrip("/")).resolve()
-        if HERE not in path.parents and path != HERE:
-            self.send_error(403)
-            return
+        path = HERE / rel_path
         if not path.is_file():
             self.send_error(404)
             return
@@ -624,13 +633,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(get_poc_detail(cve_id))
             return
 
-        if parsed.path == "/":
-            self._static("index.html")
-            return
-        if parsed.path.startswith("/_ref_fonts/"):
-            self._static(parsed.path)
-            return
-        self._static(parsed.path)
+        rel = _STATIC_FILES.get(parsed.path)
+        if rel:
+            self._static(rel)
+        else:
+            self.send_error(404)
 
     def do_PUT(self) -> None:
         length = int(self.headers.get("Content-Length", 0))
