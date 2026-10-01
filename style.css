@@ -772,7 +772,7 @@ button.row {
      counts live in the section menu, and the full freshness line opens on
      tap; a red square marks an awaiting-severity backlog meanwhile. */
   .footer { gap: 10px; padding: 6px 12px; font-size: 14px; }
-  #footer-archive, #footer-highticket, .footer .gauge { display: none; }
+  #footer-archive, #footer-highticket, .footer .gauge, #logout-btn { display: none; }  /* LOG OUT lives in the sections menu here */
   .footer .gauge-wrap {
     flex: 1;
     min-width: 0;
@@ -903,3 +903,30 @@ button.row {
   font-size: 9px; letter-spacing: 0.06em; padding: 0 3px;
   border: 1px dashed currentColor; opacity: 0.6; margin-left: 2px;
 }
+
+/* Login page (login.html): one centred form in the same phosphor chrome. */
+.login-screen { align-items: center; justify-content: center; }
+.login-box {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(360px, 100%);
+  padding: 0 16px;
+}
+.login-box .wordmark { font-size: 28px; letter-spacing: 6px; text-align: center; margin-bottom: 10px; }
+.login-label { font-size: 15px; letter-spacing: 3px; opacity: 0.8; }
+.login-input {
+  font: inherit;
+  font-size: 18px;
+  color: var(--green);
+  background: var(--wash);
+  border: 1px solid var(--green);
+  border-radius: 0;
+  padding: 10px 12px;
+  min-height: 44px;
+}
+.login-button { font: inherit; font-size: 16px; color: var(--green); padding: 10px 14px; min-height: 44px; }
+.login-button:disabled { cursor: default; opacity: 0.6; }
+.login-status { min-height: 1.4em; font-size: 14px; letter-spacing: 1px; color: var(--amber); }

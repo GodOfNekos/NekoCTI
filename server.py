@@ -9,11 +9,13 @@ import json
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 import attack
+import auth
 import db
 import enrich
 import ingest
@@ -511,7 +513,14 @@ _STATIC_FILES = {
     "/style.css": "style.css",
     "/app.js": "app.js",
     "/fonts/monofonto.otf": "fonts/monofonto.otf",
+    "/login": "login.html",
+    "/login.js": "login.js",
 }
+
+# Everything else needs a login session (auth.py).
+PUBLIC_PATHS = {"/login", "/login.js", "/style.css", "/fonts/monofonto.otf"}
+SESSION_COOKIE = "nekocti_session"
+MAX_LOGIN_BYTES = 1024
 
 # On every response. Feed text is untrusted, so the page may only run its own
 # script and style; images may come from any https source.
@@ -550,13 +559,76 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(403, "missing write header")
         return False
 
-    def _json(self, payload: dict, status: int = 200) -> None:
+    def _json(self, payload: dict, status: int = 200, cookie: str | None = None) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if cookie is not None:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
+
+    # --- login (auth.py) ---
+
+    def _session_token(self) -> str | None:
+        try:
+            morsel = SimpleCookie(self.headers.get("Cookie", "")).get(SESSION_COOKIE)
+        except CookieError:
+            return None
+        return morsel.value if morsel else None
+
+    def _logged_in(self, path: str) -> bool:
+        """Let the request through, or answer it: API calls get 401 and
+        pages go to the login page."""
+        if path in PUBLIC_PATHS or auth.session_valid(self._session_token()):
+            return True
+        if path.startswith("/api/"):
+            self._json({"error": "login required"}, status=401)
+        else:
+            self.send_response(303)
+            self.send_header("Location", "/login")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        return False
+
+    @staticmethod
+    def _cookie(token: str, max_age: int) -> str:
+        # HttpOnly: no script can read it. SameSite=Strict: no other site's
+        # request carries it. Secure: HTTPS only (localhost counts in Dev).
+        return f"{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age}"
+
+    def _login(self) -> None:
+        if not self._write_allowed():
+            return
+        if not auth.password_is_set():
+            self._json({"error": "no password set - run `main.py set-password` first"}, status=503)
+            return
+        if auth.locked_out():
+            self._json({"error": "too many wrong passwords - try again in 15 minutes"}, status=429)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            length = -1
+        if not 0 < length <= MAX_LOGIN_BYTES:
+            self.send_error(400)
+            return
+        try:
+            body = json.loads(self.rfile.read(length))
+        except ValueError:
+            body = None
+        password = body.get("password") if isinstance(body, dict) else None
+        if not isinstance(password, str) or not auth.check_password(password):
+            self._json({"error": "wrong password"}, status=401)
+            return
+        self._json({"ok": True}, cookie=self._cookie(auth.create_session(), auth.SESSION_SECONDS))
+
+    def _logout(self) -> None:
+        if not self._write_allowed():
+            return
+        auth.end_session(self._session_token())
+        self._json({"ok": True}, cookie=self._cookie("", 0))
 
     def _static(self, rel_path: str) -> None:
         path = HERE / rel_path
@@ -573,6 +645,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if not self._logged_in(parsed.path):
+            return
         qs = parse_qs(parsed.query)
 
         if parsed.path == "/api/articles":
@@ -632,6 +706,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
     def do_PUT(self) -> None:
+        if not self._logged_in(urlparse(self.path).path):
+            return
         if self.path not in _CONFIGS:
             self.send_error(404)
             return
@@ -655,6 +731,14 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": True})
 
     def do_POST(self) -> None:
+        if self.path == "/api/login":
+            self._login()
+            return
+        if self.path == "/api/logout":
+            self._logout()
+            return
+        if not self._logged_in(urlparse(self.path).path):
+            return
         if self.path == "/api/ingest/run":
             if not self._write_allowed():
                 return

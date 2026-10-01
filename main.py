@@ -8,6 +8,7 @@
     uv run python main.py classify-pocs      # tag CVEs with real PoC evidence against MITRE ATT&CK
     uv run python main.py enrich             # NVD severity, EPSS, CISA KEV, and in-the-wild reporting
     uv run python main.py enrich --limit 500 # same, allowing more (rate-limited) NVD lookups this run
+    uv run python main.py set-password       # set or reset the dashboard password (ends every session)
 """
 
 from __future__ import annotations
@@ -203,6 +204,24 @@ def cmd_classify_pocs(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def cmd_set_password(_args: argparse.Namespace) -> None:
+    """Prompted without echo, so the password never lands in a command
+    line, a shell history or a log."""
+    import getpass
+
+    import auth
+
+    db.init_db()
+    password = getpass.getpass("New dashboard password: ")
+    if password != getpass.getpass("Same again: "):
+        raise SystemExit("The two entries didn't match - nothing changed.")
+    try:
+        auth.set_password(password)
+    except ValueError as e:
+        raise SystemExit(f"{e} - nothing changed.")
+    print("Password set. Every existing session has been logged out.")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="nekocti")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -241,6 +260,9 @@ def main() -> int:
     p_enrich.add_argument("--no-backfill", action="store_true",
                            help="skip re-scanning stored articles for in-the-wild exploitation reporting")
     p_enrich.set_defaults(func=cmd_enrich)
+
+    p_password = sub.add_parser("set-password", help="set or reset the dashboard password (ends every session)")
+    p_password.set_defaults(func=cmd_set_password)
 
     args = parser.parse_args()
     args.func(args)

@@ -30,3 +30,6 @@ __pycache__/
 
 # Tests run on the host, not in the image (COPY *.py would pick them up).
 test_*.py
+
+# The dashboard password hash - never baked into an image (COPY *.json would take it)
+auth.json

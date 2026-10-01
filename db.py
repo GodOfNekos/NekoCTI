@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS cve_exploit_reports (
     PRIMARY KEY (cve_id, article_id)
 );
 
+-- Dashboard login sessions (auth.py). Only a hash of each token is stored.
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    expires_at REAL NOT NULL
+);
+
 -- Full-text search. External content: the text stays in articles, and the
 -- triggers keep the index in sync.
 CREATE VIRTUAL TABLE IF NOT EXISTS articles_fts USING fts5(

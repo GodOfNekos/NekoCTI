@@ -29,7 +29,7 @@ RUN uv sync --frozen --no-dev
 
 COPY *.py ./
 COPY *.json ./
-COPY index.html style.css app.js ./
+COPY index.html login.html style.css app.js login.js ./
 COPY fonts ./fonts
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

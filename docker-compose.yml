@@ -57,10 +57,10 @@ services:
     # the host's own network too, defeating the point of running Tailscale
     # in its own container in the first place.
     healthcheck:
-      # /api/watchlist always answers (no auth, tiny payload) -- unlike
-      # TCG Price Tracker, NekoCTI has no maintenance-lockout mode to route
-      # around, so any always-reachable real endpoint works here.
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8778/api/watchlist"]
+      # /login is one of the few paths that needs no session (everything
+      # else answers 401 or redirects since the login, 1 October 2026), and
+      # serving it proves the server is up.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8778/login"]
       interval: 30s
       timeout: 5s
       retries: 3

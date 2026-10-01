@@ -5,7 +5,7 @@ mkdir -p /app/data
 
 # The app uses bare relative filenames; symlink each into the mounted volume
 # so they survive a rebuild.
-for f in nekocti.db watchlist.json tags.json campaigns.json; do
+for f in nekocti.db watchlist.json tags.json campaigns.json auth.json; do
   [ -e "/app/data/$f" ] || touch "/app/data/$f" 2>/dev/null || true
   ln -sf "/app/data/$f" "/app/$f"
 done

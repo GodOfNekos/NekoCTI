@@ -39,3 +39,6 @@ enterprise-attack.json
 # explorer if this project is ever cloned fresh.
 ctid-kev-attack-mapping.json
 
+
+# The dashboard password hash (auth.py) - lives in the data volume, never in git
+auth.json

@@ -28,6 +28,7 @@ const safeUrl = (url) => (/^https?:\/\//i.test(url || "") ? esc(url) : "");
 
 async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
+  if (res.status === 401) location.replace("/login"); // session expired or logged out
   if (!res.ok) throw new Error(`${url} -> HTTP ${res.status}`);
   return res.json();
 }
@@ -799,6 +800,16 @@ document.addEventListener("keydown", (e) => {
 const runCheckBtn = document.getElementById("run-check-btn");
 let ingestPollTimer = null;
 
+// The footer chip on desktop; the sections menu on phone and tablet.
+async function logOut() {
+  try {
+    await writeJSON("/api/logout", "POST");
+  } finally {
+    location.replace("/login");
+  }
+}
+document.getElementById("logout-btn").addEventListener("click", logOut);
+
 function setRunCheckIdle(text) {
   runCheckBtn.textContent = text;
   runCheckBtn.classList.remove("running");
@@ -959,8 +970,10 @@ function buildNavMenu() {
       <span class="title">${esc(tabLabel(t))}</span><span class="meta">${esc(tabCount(t))}</span>
     </button>`;
   }).join("");
-  navMenu.innerHTML = `<div class="section-label">// SECTIONS</div>${items}`;
-  navMenu.querySelectorAll(".nav-item").forEach((item) => {
+  navMenu.innerHTML = `<div class="section-label">// SECTIONS</div>${items}` +
+    `<div class="section-label">// SESSION</div><button class="row nav-item" type="button" id="menu-logout"><span class="title">LOG OUT</span></button>`;
+  document.getElementById("menu-logout").addEventListener("click", logOut);
+  navMenu.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
     item.addEventListener("click", () => {
       document.querySelector(`.topnav .tab[data-tab="${item.dataset.tab}"]`).click();
       setMenuOpen(false);
