@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import getpass
 import sys
 
+import auth
 import db
 import digest as digest_mod
 import enrich
@@ -207,10 +209,6 @@ def cmd_classify_pocs(args: argparse.Namespace) -> None:
 def cmd_set_password(_args: argparse.Namespace) -> None:
     """Prompted without echo, so the password never lands in a command
     line, a shell history or a log."""
-    import getpass
-
-    import auth
-
     db.init_db()
     password = getpass.getpass("New dashboard password: ")
     if password != getpass.getpass("Same again: "):
