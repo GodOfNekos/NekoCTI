@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for ingestion: the guard on article fetches (feeds supply the links,
 so only http(s) URLs resolving to public addresses are fetched), the shared
 matching and config loading, and KEV ingestion through the shared fetcher.

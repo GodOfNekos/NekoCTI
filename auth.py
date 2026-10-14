@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Dashboard login: one password, kept only as a PBKDF2-SHA256 hash, and
 30-day sessions, kept only as hashes of their tokens. The design and why a
 password (not a tailnet identity check) is in the vault's NekoCTI Login note.

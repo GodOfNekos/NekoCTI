@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """NekoCTI CLI.
 
     uv run python main.py ingest             # poll all sources once

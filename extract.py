@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Regex extraction and watchlist/tag matching against article text.
 
 Only fixed patterns live here (CVE IDs, explicit CVSS scores, keyword and

@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Cameron Gates (GodOfNekos)
+   SPDX-License-Identifier: AGPL-3.0-or-later */
 // NekoCTI login page. The server sets the session cookie; this page only
 // sends the password and shows why a login failed.
 

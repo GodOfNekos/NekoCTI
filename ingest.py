@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """RSS polling and full-article fetching.
 
 Feed descriptions are often short teasers, so each item's full text comes

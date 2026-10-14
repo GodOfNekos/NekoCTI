@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The daily digest, appended to the vault's daily note.
 
 Groups what's new into high ticket, watchlist or tracked-entity matches, and

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Per-CVE enrichment for CVEs NekoCTI has already captured, keyed on CVE ID
 like pocs.py:
 

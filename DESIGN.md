@@ -9,55 +9,55 @@ colors:
   signal-red: "#ff5c4d"
 typography:
   label:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "26px"
     fontWeight: 400
     lineHeight: 1
     letterSpacing: "1px"
   body:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "17px"
     fontWeight: 400
     lineHeight: 1.4
     letterSpacing: "normal"
   mono-small:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.3
     letterSpacing: "1px"
   title:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "22px"
     fontWeight: 400
     lineHeight: 1.3
     letterSpacing: "1px"
   title-compact:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "18px"
     fontWeight: 400
     lineHeight: 1.3
     letterSpacing: "1px"
   body-compact:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "16px"
     fontWeight: 400
     lineHeight: 1.5
     letterSpacing: "normal"
   meta:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.3
     letterSpacing: "1px"
   micro:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.2
     letterSpacing: "3px"
   fine-print:
-    fontFamily: "'PipBoy' (Monofonto), 'Courier New', monospace"
+    fontFamily: "'PipBoy' (Share Tech Mono), 'Courier New', monospace"
     fontSize: "11px"
     fontWeight: 400
     lineHeight: 1.6
@@ -150,7 +150,7 @@ The palette is a single accent against a dark neutral, plus two status colors re
 
 ## Typography
 
-**Display/Body/Label Font:** "PipBoy" (Monofonto), falling back to `'Courier New', monospace`.
+**Display/Body/Label Font:** "PipBoy" (Share Tech Mono, SIL OFL; replaced Monofonto in October 2026, whose licence doesn't allow redistribution), falling back to `'Courier New', monospace`.
 
 **Character:** One monospaced face carries every role in the system - there is no separate display or body pairing. Hierarchy comes from size, opacity, and letter-spacing, not a font change, which reads as instrument-panel readout rather than editorial typography.
 

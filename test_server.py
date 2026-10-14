@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for server.py's HTTP surface: the login gate, only the page's own
 files are served, every response carries the security headers, and writes
 need a session, the write header and a valid, size-capped body. The
@@ -90,7 +92,7 @@ class Login(Served):
             self.assertEqual(self.request("/api/articles", cookie=forged)[0], 401, forged)
 
     def test_the_login_page_loads_without_one(self):
-        for path in ("/login", "/login.js", "/style.css", "/fonts/monofonto.otf"):
+        for path in ("/login", "/login.js", "/style.css", "/fonts/ShareTechMono-Regular.ttf"):
             self.assertEqual(self.request(path, cookie=False)[0], 200, path)
 
     def test_the_right_password_gives_a_strict_session_cookie(self):
@@ -147,7 +149,7 @@ class Login(Served):
 class StaticFiles(Served):
     def test_the_page_and_its_assets_are_served(self):
         for path, ctype in (("/", "text/html"), ("/index.html", "text/html"), ("/style.css", "text/css"),
-                            ("/app.js", "application/javascript"), ("/fonts/monofonto.otf", "font/otf"),
+                            ("/app.js", "application/javascript"), ("/fonts/ShareTechMono-Regular.ttf", "font/ttf"),
                             ("/login", "text/html"), ("/login.js", "application/javascript")):
             code, headers, _ = self.request(path)
             self.assertEqual(code, 200, path)

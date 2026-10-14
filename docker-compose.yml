@@ -23,9 +23,9 @@ services:
       # its own. No auth needed since Ollama has none by design.
       - OLLAMA_URL=http://host.docker.internal:11434
       # Where the digest feature writes -- see the vault-daily-notes mount
-      # below. Neko's real vault path is outside this project entirely, so
-      # this can't default the way it does on bare-metal (Path.home()
-      # inside the container resolves to appuser's home, not Neko's).
+      # below. The real notes folder is outside this project, so this can't
+      # default the way it does on bare-metal (Path.home() inside the
+      # container is appuser's home).
       - VAULT_DAILY_NOTES_PATH=/app/vault-daily-notes
       # Local time for anything written into the vault: the digest's note
       # filename and its heading timestamp. Without it the container ran on
@@ -40,10 +40,11 @@ services:
       # Tailscale's own node state so it doesn't rejoin as a brand new
       # device every restart.
       - ./data:/app/data
-      # Scoped to only the Daily Notes folder, not the whole vault --
-      # least privilege: the digest only ever needs to read/write today's
-      # note, so that's the only part of Neko's vault this container can
-      # ever reach, even if it were somehow compromised.
+      # Only the daily-notes folder, never a whole notes vault -- least
+      # privilege: the digest only ever needs today's note, so that's all
+      # this container can reach, even if it were somehow compromised.
+      # Set DIGEST_NOTES_DIR in .env, or point it elsewhere in a local
+      # docker-compose.override.yml (gitignored).
       - "${DIGEST_NOTES_DIR:-./digest-notes}:/app/vault-daily-notes"
     extra_hosts:
       # Docker Desktop on Windows/Mac defines this automatically, but

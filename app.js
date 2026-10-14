@@ -1,3 +1,5 @@
+/* Copyright (C) 2026 Cameron Gates (GodOfNekos)
+   SPDX-License-Identifier: AGPL-3.0-or-later */
 // NekoCTI dashboard - vanilla JS, no framework or build step.
 //
 // Everything shown comes from feeds, advisories and user-edited lists, so

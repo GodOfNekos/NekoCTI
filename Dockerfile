@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # NekoCTI container: the app, uv, Tailscale (its own tailnet identity, not
 # the host's) and the ATT&CK reference data.
 #

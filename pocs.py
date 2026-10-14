@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Public PoC availability for captured CVEs, from nomi-sec/PoC-in-GitHub:
 one JSON file per CVE listing the GitHub repos that claim to be a PoC. A
 lookup keyed on CVE ID, so it enriches captured CVEs rather than ingesting.

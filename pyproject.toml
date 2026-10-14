@@ -3,6 +3,8 @@ name = "nekocti"
 version = "0.1.0"
 description = "Self-hosted OSINT/threat-intelligence tracker"
 readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
 authors = [
     { name = "GodOfNekos", email = "15893709+GodOfNekos@users.noreply.github.com" }
 ]

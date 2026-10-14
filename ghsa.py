@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """GitHub Security Advisories ingestion.
 
 A JSON API, not RSS, so it has its own module like kev.py. It supports a

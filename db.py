@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """SQLite schema and access for NekoCTI's archive.
 
 The source side is generic (a `sources` table, no source-specific columns),

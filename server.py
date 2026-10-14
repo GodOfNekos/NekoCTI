@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """NekoCTI dashboard backend: Python's standard-library HTTP server, bound
 to 127.0.0.1. In the container, `tailscale serve` is the only way in.
 Reuses db.py and extract.py for all data access.
@@ -501,7 +503,7 @@ _STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
-    ".otf": "font/otf",
+    ".ttf": "font/ttf",
 }
 
 # The only files the page needs, by URL path; everything else is a 404. The
@@ -512,13 +514,13 @@ _STATIC_FILES = {
     "/index.html": "index.html",
     "/style.css": "style.css",
     "/app.js": "app.js",
-    "/fonts/monofonto.otf": "fonts/monofonto.otf",
+    "/fonts/ShareTechMono-Regular.ttf": "fonts/ShareTechMono-Regular.ttf",
     "/login": "login.html",
     "/login.js": "login.js",
 }
 
 # Everything else needs a login session (auth.py).
-PUBLIC_PATHS = {"/login", "/login.js", "/style.css", "/fonts/monofonto.otf"}
+PUBLIC_PATHS = {"/login", "/login.js", "/style.css", "/fonts/ShareTechMono-Regular.ttf"}
 SESSION_COOKIE = "nekocti_session"
 MAX_LOGIN_BYTES = 1024
 

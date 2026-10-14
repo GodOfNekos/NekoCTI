@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for digest.py's per-article line. Stdlib only, in-memory SQLite, and
 nothing is written to the vault.
 

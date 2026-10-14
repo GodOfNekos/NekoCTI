@@ -1,9 +1,14 @@
-/* NekoCTI - Pip-Boy Personal Monitor. Font and colour pair from a Fallout 4
-   Pip-Boy CSS recreation (AviralMehrotra/Fallout4-Pip-Boy); see DESIGN.md. */
+/* Copyright (C) 2026 Cameron Gates (GodOfNekos)
+   SPDX-License-Identifier: AGPL-3.0-or-later */
+/* NekoCTI - Pip-Boy Personal Monitor. Colour pair from a Fallout 4 Pip-Boy CSS
+   recreation (AviralMehrotra/Fallout4-Pip-Boy); see DESIGN.md. The font is
+   Share Tech Mono (SIL Open Font License, fonts/OFL-ShareTechMono.txt), which
+   replaced Monofonto in October 2026 because Monofonto's licence doesn't allow
+   handing the font file out, and the repository is public. */
 
 @font-face {
   font-family: "PipBoy";
-  src: url('fonts/monofonto.otf') format('opentype');
+  src: url('fonts/ShareTechMono-Regular.ttf') format('truetype');
 }
 
 :root {
@@ -355,6 +360,7 @@ body {
   user-select: none;
 }
 .chip-action:hover { background: var(--wash); }
+a.chip-action { color: inherit; text-decoration: none; }
 .chip-action.running {
   cursor: default;
   opacity: 0.6;
@@ -772,7 +778,7 @@ button.row {
      counts live in the section menu, and the full freshness line opens on
      tap; a red square marks an awaiting-severity backlog meanwhile. */
   .footer { gap: 10px; padding: 6px 12px; font-size: 14px; }
-  #footer-archive, #footer-highticket, .footer .gauge, #logout-btn { display: none; }  /* LOG OUT lives in the sections menu here */
+  #footer-archive, #footer-highticket, .footer .gauge, #logout-btn, #source-link { display: none; }  /* LOG OUT lives in the sections menu here; the source link is on the login page */
   .footer .gauge-wrap {
     flex: 1;
     min-width: 0;
@@ -930,3 +936,4 @@ button.row {
 .login-button { font: inherit; font-size: 16px; color: var(--green); padding: 10px 14px; min-height: 44px; }
 .login-button:disabled { cursor: default; opacity: 0.6; }
 .login-status { min-height: 1.4em; font-size: 14px; letter-spacing: 1px; color: var(--amber); }
+.login-source { display: block; text-align: center; font-size: 14px; color: inherit; opacity: 0.7; }

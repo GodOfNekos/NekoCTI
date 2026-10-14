@@ -42,3 +42,11 @@ ctid-kev-attack-mapping.json
 
 # The dashboard password hash (auth.py) - lives in the data volume, never in git
 auth.json
+
+# Personal, kept on the author's machine only: the original product brief, and
+# the compose override that points the digest at a real notes folder.
+PRODUCT.md
+docker-compose.override.yml
+
+# The digest's default output folder when DIGEST_NOTES_DIR isn't set
+digest-notes/

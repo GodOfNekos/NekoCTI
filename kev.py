@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """CISA KEV (Known Exploited Vulnerabilities) ingestion.
 
 The feed is the whole catalog every time, so only entries added in the last
