@@ -1,13 +1,15 @@
 # Copyright (C) 2026 Cameron Gates (GodOfNekos)
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """NekoCTI dashboard backend: Python's standard-library HTTP server, bound
-to 127.0.0.1. In the container, `tailscale serve` is the only way in.
-Reuses db.py and extract.py for all data access.
+to 127.0.0.1 unless NEKOCTI_BIND says otherwise (the container image sets
+0.0.0.0 so Docker can publish it; docker-compose.yml then publishes it on the
+host's loopback only). Reuses db.py and extract.py for all data access.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -24,7 +26,7 @@ import ingest
 
 HERE = Path(__file__).resolve().parent
 PORT = 8778
-BIND = "127.0.0.1"
+BIND = os.environ.get("NEKOCTI_BIND", "127.0.0.1")
 
 RANGE_HOURS = {"24h": 24, "7d": 24 * 7, "all": None}
 
@@ -405,9 +407,12 @@ MAX_CONFIG_BYTES = 256 * 1024
 def read_config(url_path: str) -> dict:
     name, key = _CONFIGS[url_path]
     path = HERE / name
-    if not path.exists():
+    # Missing or empty (a fresh container's entrypoint creates empty files):
+    # nothing configured yet.
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if not text.strip():
         return {key: {} if key == "vendors" else []}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(text)
 
 
 def valid_config(url_path: str, data) -> bool:
@@ -507,8 +512,8 @@ _STATIC_TYPES = {
 }
 
 # The only files the page needs, by URL path; everything else is a 404. The
-# app folder also holds the database and, in the container, data/ with the
-# node's Tailscale keys (served to the whole tailnet until 30 September 2026).
+# app folder also holds the database and, in the container, data/, which can
+# hold private keys (an early version served it, fixed 30 September 2026).
 _STATIC_FILES = {
     "/": "index.html",
     "/index.html": "index.html",
@@ -543,8 +548,9 @@ WRITE_HEADER = "X-NekoCTI"
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        """One line per request to stderr (the container log): who, from
-        which tailnet address, what. Never bodies."""
+        """One line per request to stderr (the container log): who (a
+        proxy's user header, such as Tailscale Serve's, when there is one),
+        from which address, what. Never bodies."""
         headers = getattr(self, "headers", None) or {}   # absent on a malformed request line
         who = headers.get("Tailscale-User-Login", "-")
         where = headers.get("X-Forwarded-For", self.client_address[0])

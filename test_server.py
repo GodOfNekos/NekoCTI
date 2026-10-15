@@ -226,3 +226,22 @@ class Urls(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreshInstall(unittest.TestCase):
+    """A new container's entrypoint creates empty config files. Empty means
+    "nothing configured yet", the same as missing, never a crash."""
+
+    def test_empty_config_files_read_as_empty(self):
+        import extract
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            for name in ("watchlist.json", "tags.json", "campaigns.json"):
+                (d / name).write_text("", encoding="utf-8")
+            with mock.patch.object(extract, "WATCHLIST_PATH", d / "watchlist.json"), \
+                 mock.patch.object(extract, "TAGS_PATH", d / "tags.json"), \
+                 mock.patch.object(extract, "CAMPAIGNS_PATH", d / "campaigns.json"):
+                self.assertEqual(extract.load_filters(), ({}, [], []))
+            with mock.patch.object(server, "HERE", d):
+                self.assertEqual(server.read_config("/api/watchlist"), {"vendors": {}})
+                self.assertEqual(server.read_config("/api/tags"), {"entities": []})

@@ -68,9 +68,12 @@ def extract_cves(text: str) -> list[tuple[str, float | None]]:
 
 
 def _load(path: Path, key: str, default):
-    if not path.exists():
+    # Missing or empty both mean "nothing configured yet": the container's
+    # entrypoint creates empty files on a fresh install.
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    if not text.strip():
         return default
-    return json.loads(path.read_text(encoding="utf-8")).get(key, default)
+    return json.loads(text).get(key, default)
 
 
 def load_filters() -> tuple[dict[str, list[str]], list[dict], list[dict]]:

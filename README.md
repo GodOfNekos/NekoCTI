@@ -43,16 +43,19 @@ Dependencies: `feedparser`, `httpx`, `trafilatura` and `mitreattack-python`.
 
 ### Docker (how it's meant to run)
 
-The container joins your [Tailscale](https://tailscale.com) network as its own device and serves
-the dashboard over HTTPS with `tailscale serve`. It publishes no port on the host.
+1. Optional: copy `.env.example` to `.env`. `NVD_API_KEY` makes NVD lookups ten times faster, and
+   `DIGEST_NOTES_DIR` points the digest at the folder holding your daily notes (`YYYY-MM-DD.md`
+   files); otherwise it goes to `./digest-notes`.
+2. `docker compose up -d --build`
+3. Set the dashboard password: `docker compose exec nekocti /app/.venv/bin/python main.py set-password`
+4. Open `http://127.0.0.1:8778/` on the same machine.
 
-1. Copy `.env.example` to `.env` and set `TS_AUTHKEY` (a Tailscale auth key). `NVD_API_KEY` is
-   optional and makes NVD lookups ten times faster.
-2. Optional: to receive the digest, set `DIGEST_NOTES_DIR` to the folder holding your daily notes
-   (`YYYY-MM-DD.md` files). Otherwise it goes to `./digest-notes`.
-3. `docker compose up -d --build`
-4. Set the dashboard password: `docker compose exec nekocti /app/.venv/bin/python main.py set-password`
-5. Open `https://<TS_HOSTNAME>.<your-tailnet>.ts.net/` from a device on your tailnet.
+The dashboard is published on the machine's loopback only. To use it from other devices, put your
+own private access in front of it: a VPN (for example Tailscale or WireGuard), or a reverse proxy
+that serves it over HTTPS. The login cookie is HTTPS-only, which browsers relax only for
+`localhost`, so anything beyond the machine itself needs HTTPS. Anything specific to your setup
+can go in a `docker-compose.override.yml`, which `docker compose` merges automatically and git
+ignores.
 
 ATT&CK classification needs Ollama on the Docker host (`OLLAMA_URL`, default
 `http://host.docker.internal:11434`) with the model named in `attack.py`.
@@ -86,8 +89,8 @@ All three are editable from the dashboard and live in `data/` under Docker.
 
 ## Security
 
-- **Keep it off the public internet.** It's built to sit on a private network (Tailscale here)
-  behind its own password login, with 30-day sessions.
+- **Keep it off the public internet.** It's built for one person on a private network, behind its
+  own password login with 30-day sessions. Docker publishes it on loopback only.
 - Feed content is untrusted. Everything is escaped before display, links and images are
   http(s)-only, a strict Content-Security-Policy is set, and article pages are fetched only from
   public addresses. Writes need a custom header, and config writes are validated and capped.

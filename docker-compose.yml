@@ -1,66 +1,44 @@
+# Copyright (C) 2026 Cameron Gates (GodOfNekos)
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# NekoCTI on Docker. The dashboard is published on this machine's loopback
+# only (http://127.0.0.1:8778/). To reach it from other devices, put your own
+# private access in front (a VPN, or a reverse proxy with HTTPS), and keep it
+# off the public internet. A local docker-compose.override.yml (gitignored)
+# is merged automatically if you need to change anything for your own setup.
 services:
   nekocti:
     build: .
     container_name: nekocti
     restart: unless-stopped
     environment:
-      # Generate a reusable, tagged auth key at
-      # https://login.tailscale.com/admin/settings/keys and put it in a
-      # local .env file (see .env.example) -- never commit the real key.
-      - TS_AUTHKEY=${TS_AUTHKEY}
-      # Deliberately its own hostname, distinct from tcg-price-tracker's --
-      # each container gets its own separate tailnet identity, same
-      # reasoning as why they're separate containers in the first place.
-      - TS_HOSTNAME=${TS_HOSTNAME:-nekocti}
-      # Optional, from .env (see .env.example): a free NVD API key raises
-      # the CVE-severity lookup limit from 5 requests per 30s to 50, which
-      # is the difference between a ~7 hour and a ~90 minute full backfill.
-      # `enrich` works without it, just slower, so no default is needed.
+      # Optional, from .env (see .env.example): a free NVD API key raises the
+      # CVE-severity lookup limit from 5 requests per 30s to 50, the
+      # difference between a ~7 hour and a ~90 minute full backfill.
       - NVD_API_KEY=${NVD_API_KEY:-}
-      # host.docker.internal reaches the Ollama instance already running
-      # on this machine's own host -- localhost/127.0.0.1 from inside the
-      # container would mean the container itself, which has no Ollama of
-      # its own. No auth needed since Ollama has none by design.
-      - OLLAMA_URL=http://host.docker.internal:11434
-      # Where the digest feature writes -- see the vault-daily-notes mount
-      # below. The real notes folder is outside this project, so this can't
-      # default the way it does on bare-metal (Path.home() inside the
-      # container is appuser's home).
+      # ATT&CK classification uses Ollama on the Docker host. localhost inside
+      # the container would mean the container itself.
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      # Where the digest writes; see the notes mount below.
       - VAULT_DAILY_NOTES_PATH=/app/vault-daily-notes
-      # Local time for anything written into the vault: the digest's note
-      # filename and its heading timestamp. Without it the container ran on
-      # UTC, stamping a 7:10 AM digest "6:10 AM" and, between midnight and
-      # 1 AM in summer, targeting the previous day's note. The image already
-      # ships /usr/share/zoneinfo/Europe/London (checked 24 September 2026).
-      # Stored timestamps are timezone-aware UTC and are unaffected.
-      - TZ=Europe/London
+      # Local time for the digest's note name and heading. Stored timestamps
+      # are timezone-aware UTC and unaffected.
+      - TZ=${TZ:-Europe/London}
+    ports:
+      # Loopback only: reachable from this machine, not from the network.
+      - "127.0.0.1:8778:8778"
     volumes:
       # The SQLite archive and the editable JSON configs (watchlist, tags,
-      # campaigns) -- everything that needs to survive a rebuild, plus
-      # Tailscale's own node state so it doesn't rejoin as a brand new
-      # device every restart.
+      # campaigns, the password hash): everything that must survive a rebuild.
       - ./data:/app/data
       # Only the daily-notes folder, never a whole notes vault -- least
-      # privilege: the digest only ever needs today's note, so that's all
-      # this container can reach, even if it were somehow compromised.
-      # Set DIGEST_NOTES_DIR in .env, or point it elsewhere in a local
-      # docker-compose.override.yml (gitignored).
+      # privilege: the digest only ever needs today's note. Set
+      # DIGEST_NOTES_DIR in .env to point it at yours.
       - "${DIGEST_NOTES_DIR:-./digest-notes}:/app/vault-daily-notes"
     extra_hosts:
-      # Docker Desktop on Windows/Mac defines this automatically, but
-      # declaring it explicitly here means the same compose file also
-      # works unchanged on a real Linux Docker host later, where it isn't
-      # automatic.
+      # Automatic on Docker Desktop; declared so a Linux Docker host works too.
       - "host.docker.internal:host-gateway"
-    # Not publishing a host port on purpose -- the only way in is through
-    # `tailscale serve` inside the container, over the tailnet. Same
-    # reasoning as TCG Price Tracker: publishing 8778 here would put it on
-    # the host's own network too, defeating the point of running Tailscale
-    # in its own container in the first place.
     healthcheck:
-      # /login is one of the few paths that needs no session (everything
-      # else answers 401 or redirects since the login, 1 October 2026), and
-      # serving it proves the server is up.
+      # /login is one of the few paths that needs no session.
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8778/login"]
       interval: 30s
       timeout: 5s

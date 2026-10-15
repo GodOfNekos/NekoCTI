@@ -16,9 +16,10 @@ Only the latest commit on `main` is supported.
 ## How NekoCTI is meant to be deployed
 
 NekoCTI is a single-user tool for a private network. The supported setup is the Docker container
-on its own Tailscale node, served with `tailscale serve` (never `tailscale funnel`) and protected
-by the dashboard's own password login. Running it on the public internet is outside what it's
-designed for.
+published on the host's loopback (as `docker-compose.yml` does), reached from other devices only
+through private access you control (a VPN, or a reverse proxy serving HTTPS), and protected by the
+dashboard's own password login. Running it on the public internet is outside what it's designed
+for.
 
 Things the design already assumes are hostile, and handles:
 - **Feed content.** Titles, links, images and article text come from third parties. They're

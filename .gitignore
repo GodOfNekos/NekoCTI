@@ -50,3 +50,6 @@ docker-compose.override.yml
 
 # The digest's default output folder when DIGEST_NOTES_DIR isn't set
 digest-notes/
+
+# This machine's Tailscale serve config (see docker-compose.override.yml)
+tailscale-config/
