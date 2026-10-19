@@ -10,6 +10,7 @@
     uv run python main.py classify-pocs      # tag CVEs with real PoC evidence against MITRE ATT&CK
     uv run python main.py enrich             # NVD severity, EPSS, CISA KEV, and in-the-wild reporting
     uv run python main.py enrich --limit 500 # same, allowing more (rate-limited) NVD lookups this run
+    uv run python main.py enrich --records 8000 --no-nvd  # backfill the CVE record for every captured CVE
     uv run python main.py set-password       # set or reset the dashboard password (ends every session)
 """
 
@@ -114,8 +115,8 @@ def _refresh_after_ingest() -> None:
     conn = db.connect()
     try:
         s = enrich.refresh_after_ingest(conn)
-        print(f"  refreshed: EPSS {s['epss_updated']}, KEV-listed {s['kev_listed']}, "
-              f"NVD +{s['nvd_scored']}, new CVE mentions {s['mentions_added']}, "
+        print(f"  refreshed: CVE records +{s['records_scored']} scored, EPSS {s['epss_updated']}, "
+              f"KEV-listed {s['kev_listed']}, NVD +{s['nvd_scored']}, new CVE mentions {s['mentions_added']}, "
               f"exploitation claims {s['exploit_claims']}")
     except Exception as e:
         print(f"  freshness pass failed (articles are still ingested): {e}")
@@ -142,7 +143,11 @@ def cmd_enrich(args: argparse.Namespace) -> None:
             do_nvd=not args.no_nvd,
             do_epss=not args.no_epss,
             do_kev=not args.no_kev,
+            records_limit=args.records,
         )
+        if args.records:
+            print(f"CVE records read:         {summary['records_checked']}, "
+                  f"{summary['records_scored']} with a score, {summary['records_failed']} failed")
         print(f"EPSS scores updated:      {summary['epss_updated']}")
         print(f"CVEs listed in CISA KEV:  {summary['kev_listed']}"
               + ("  (catalog fetch failed)" if summary.get("kev_failed") else ""))
@@ -254,6 +259,9 @@ def main() -> int:
     p_enrich.add_argument("--limit", type=int, default=200,
                            help="max NVD lookups this run (default: 200; NVD allows 5 requests/30s "
                                 "without an API key, 50 with NVD_API_KEY set)")
+    p_enrich.add_argument("--records", type=int, default=300,
+                           help="max CVE records to read this run (default: 300; 0 skips them). "
+                                "A first backfill of every captured CVE needs one large run")
     p_enrich.add_argument("--no-nvd", action="store_true", help="skip the NVD severity lookups")
     p_enrich.add_argument("--no-epss", action="store_true", help="skip the EPSS refresh")
     p_enrich.add_argument("--no-kev", action="store_true", help="skip the CISA KEV catalog check")

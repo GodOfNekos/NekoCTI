@@ -14,19 +14,22 @@ Written by Cameron Gates (GodOfNekos). Free software under the GNU Affero Genera
   and 30 curated threat-intel blogs (analyst, community, government, vendor and media).
 - **Dashboard tabs:** HIGH TICKET, WATCHLIST, BREACHES, APT / ENTITIES, CAMPAIGNS, ARCHIVE,
   ATT&CK and POCS. Built for daily use on desktop, tablet and phone.
-- **CVE enrichment,** four signals kept apart on purpose:
+- **CVE enrichment,** signals kept apart on purpose:
 
   | Signal | Source | Means |
   |---|---|---|
-  | Severity | NVD 2.0 | The official CVSS base score, severity, vector and CWE. |
+  | Severity | NVD 2.0, else the CVE Record | The official CVSS score; until NVD has analysed a CVE, the CNA's own (or CISA's), labelled as such. |
+  | Affected products | the CVE Record | Every vendor and product the CNA lists. This, not the articles, links a CVE to your watchlist on the POCS tab. |
+  | SSVC | CISA, in the CVE Record | CISA's decision points: exploitation (none, PoC, active), automatable, technical impact. |
   | Exploited (confirmed) | CISA KEV | Exploited in the wild, per CISA, with the date added and ransomware use. |
   | Exploited (reported) | captured coverage | An article states the CVE is being exploited, often days before KEV lists it. |
   | Likelihood | FIRST.org EPSS | Predicted probability of exploitation in the next 30 days. |
 
-  A public proof-of-concept is a fifth, separate fact: exploit code exists, which says nothing
+  A public proof-of-concept is a separate fact: exploit code exists, which says nothing
   about use.
-- **High ticket:** anything at CVSS 9.0+, KEV-listed, reported exploited, at or above the 95th
-  EPSS percentile, or a critical GitHub advisory, whatever the vendor.
+- **High ticket:** anything at CVSS 9.0+ (NVD's or the CVE Record's), KEV-listed, reported
+  exploited, at or above the 95th EPSS percentile, or a critical GitHub advisory, whatever the
+  vendor.
 - **ATT&CK mapping** by a local LLM through [Ollama](https://ollama.com). Every technique ID it
   returns is checked against the real ATT&CK catalogue, and anything invented is dropped.
 - **Nothing is deleted for age.** Every check re-verifies the facts instead (EPSS, KEV,
@@ -74,7 +77,8 @@ uv run python server.py                  # dashboard at http://127.0.0.1:8778/
 ```
 uv run python main.py ingest             # poll every source once (the dashboard's RUN CHECK NOW does the same)
 uv run python main.py classify           # ATT&CK classification with the local LLM
-uv run python main.py enrich             # CVE severity and exploitation facts (--limit, --no-nvd)
+uv run python main.py enrich             # CVE severity and exploitation facts (--limit, --records, --no-nvd)
+uv run python main.py enrich --records 8000 --no-nvd  # first run: read the CVE Record for every captured CVE
 uv run python main.py digest --no-write  # print the digest (without --no-write it appends to today's note)
 ```
 

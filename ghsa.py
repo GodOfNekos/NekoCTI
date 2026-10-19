@@ -4,14 +4,13 @@
 
 A JSON API, not RSS, so it has its own module like kev.py. It supports a
 published-date filter and sorting, so each run fetches one page of recent
-advisories. Unauthenticated limit is 60 requests an hour; GITHUB_TOKEN is
-honoured if set (5,000 an hour). Package and ecosystem names are matched
+advisories (one GitHub API request; see enrich.github_headers for the rate
+limit and GITHUB_TOKEN). Package and ecosystem names are matched
 against the watchlist alongside the text.
 """
 
 from __future__ import annotations
 
-import os
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -41,18 +40,6 @@ def real_title(summary: str | None, description: str | None, fallback: str) -> s
     return summary or fallback
 
 
-def _headers() -> dict:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "NekoCTI",
-    }
-    token = os.environ.get("GITHUB_TOKEN")
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
 def fetch_advisories(since: date) -> list[dict]:
     """One page of advisories published after `since`, newest first. No
     pagination, to stay well under the unauthenticated rate limit."""
@@ -60,7 +47,7 @@ def fetch_advisories(since: date) -> list[dict]:
         f"{GHSA_URL}?published=%3E{since.isoformat()}"
         f"&per_page={PER_PAGE}&sort=published&direction=desc"
     )
-    return enrich.get_json(url, _headers(), REQUEST_TIMEOUT_S)
+    return enrich.get_json(url, enrich.github_headers(), REQUEST_TIMEOUT_S)
 
 
 def _normalize_timestamp(raw: str) -> str:
@@ -123,8 +110,11 @@ def ingest_ghsa(conn) -> dict:
         entity_matches = extract.match_named(text_for_matching, tags)
         campaign_matches = extract.match_named(text_for_matching, campaigns)
         # The API gives the score directly, plus GitHub's reviewed severity.
+        # Critical only, the documented rule: counting "high" as well made 599
+        # of 770 GHSA high tickets on 19 October 2026, almost none of them on
+        # the watchlist.
         high_ticket = (score is not None and score >= extract.HIGH_TICKET_CVSS_THRESHOLD) \
-            or severity.lower() in ("critical", "high")
+            or severity.lower() == "critical"
         breach = extract.is_breach(title, body)
         poc_mentioned = extract.mentions_poc(title, body)
 

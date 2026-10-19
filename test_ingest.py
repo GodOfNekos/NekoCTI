@@ -17,6 +17,7 @@ from unittest import mock
 
 import db
 import extract
+import ghsa
 import ingest
 import kev
 
@@ -97,6 +98,17 @@ class KevIngest(unittest.TestCase):
     def test_a_failed_fetch_is_reported_not_raised(self):
         with mock.patch.object(kev.enrich, "fetch_kev_catalog", return_value=None):
             self.assertIn("error", kev.ingest_kev(self.conn))
+
+    def test_only_critical_advisories_are_high_ticket(self):
+        def adv(n, severity, score):
+            return {"ghsa_id": f"GHSA-{n}", "html_url": f"https://github.com/advisories/GHSA-{n}",
+                    "summary": f"Flaw {n}", "severity": severity, "cve_id": f"CVE-2026-{1000 + n}",
+                    "cvss_severities": {"cvss_v3": {"score": score}}, "published_at": "2026-10-19T00:00:00Z"}
+        advisories = [adv(1, "high", 7.5), adv(2, "critical", 8.8), adv(3, "high", 9.1), adv(4, "medium", None)]
+        with mock.patch.object(ghsa, "fetch_advisories", return_value=advisories):
+            ghsa.ingest_ghsa(self.conn)
+        flagged = {r[0]: r[1] for r in self.conn.execute("SELECT guid, high_ticket FROM articles")}
+        self.assertEqual(flagged, {"GHSA-1": 0, "GHSA-2": 1, "GHSA-3": 1, "GHSA-4": 0})
 
 
 if __name__ == "__main__":

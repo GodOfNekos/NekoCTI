@@ -38,8 +38,11 @@ with Reserved Font Name 'Share', licensed under the SIL Open Font License 1.1. T
 
 Articles, advisories and scores (The Hacker News, Krebs on Security, CISA KEV, GitHub Security
 Advisories, NVD, FIRST.org EPSS and the curated threat-intel blogs) are fetched at run time into
-your own local database. None of that content is stored in or distributed with this repository.
-Each source's own terms apply to what you fetch.
+your own local database. So are CVE Records from the CVE Program's
+[cvelistV5](https://github.com/CVEProject/cvelistV5) repository, used under the
+[CVE Program Terms of Use](https://www.cve.org/Legal/TermsOfUse), and the PoC listing from
+[nomi-sec/PoC-in-GitHub](https://github.com/nomi-sec/PoC-in-GitHub). None of that content is
+stored in or distributed with this repository. Each source's own terms apply to what you fetch.
 
 ## Python dependencies
 

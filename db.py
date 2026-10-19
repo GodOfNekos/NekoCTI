@@ -147,6 +147,16 @@ CREATE TABLE IF NOT EXISTS cve_scores (
     kev_checked_at TEXT
 );
 
+-- Every vendor and product the CVE record lists as affected (cverecord.py),
+-- replaced on each fetch. The CVE-to-vendor link, instead of whatever
+-- vendors an article happened to name.
+CREATE TABLE IF NOT EXISTS cve_affected (
+    cve_id TEXT NOT NULL,
+    vendor TEXT,
+    product TEXT
+);
+CREATE INDEX IF NOT EXISTS cve_affected_cve ON cve_affected(cve_id);
+
 -- Which CVE a piece of coverage claims is exploited, and from which article.
 CREATE TABLE IF NOT EXISTS cve_exploit_reports (
     cve_id TEXT NOT NULL,
@@ -192,6 +202,23 @@ _MIGRATIONS = [
     ("articles", "attack_classified_at", "TEXT"),
     ("articles", "mentions_poc", "INTEGER NOT NULL DEFAULT 0"),
     ("articles", "exploited_in_wild", "INTEGER NOT NULL DEFAULT 0"),
+    # The CVE record (cverecord.py): the CNA's or CISA's score, kept apart
+    # from NVD's so the dashboard can say which one it shows.
+    ("cve_scores", "rec_base_score", "REAL"),
+    ("cve_scores", "rec_severity", "TEXT"),
+    ("cve_scores", "rec_cvss_version", "TEXT"),
+    ("cve_scores", "rec_vector", "TEXT"),
+    ("cve_scores", "rec_score_source", "TEXT"),
+    ("cve_scores", "rec_cwes", "TEXT"),
+    ("cve_scores", "rec_state", "TEXT"),
+    ("cve_scores", "rec_published", "TEXT"),
+    ("cve_scores", "rec_checked_at", "TEXT"),
+    ("cve_scores", "ssvc_exploitation", "TEXT"),
+    ("cve_scores", "ssvc_automatable", "TEXT"),
+    ("cve_scores", "ssvc_technical_impact", "TEXT"),
+    # The PoC-in-GitHub file's git blob hash when last read (pocs.py), "" for
+    # "no file"; an unchanged hash means nothing to fetch.
+    ("poc_checks", "blob_sha", "TEXT"),
 ]
 
 
@@ -454,20 +481,13 @@ def search_articles(conn: sqlite3.Connection, query: str, limit: int = 100) -> l
         return conn.execute(sql, (phrase, limit)).fetchall()
 
 
-def cves_needing_poc_check(conn: sqlite3.Connection, recheck_after_hours: int) -> list[str]:
-    """Captured CVEs never checked for a PoC, or last checked long enough ago
-    that one may have appeared."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=recheck_after_hours)).isoformat()
-    rows = conn.execute(
-        "SELECT DISTINCT cm.cve_id FROM cve_mentions cm "
-        "LEFT JOIN poc_checks pc ON pc.cve_id = cm.cve_id "
-        "WHERE pc.cve_id IS NULL OR pc.checked_at < ?",
-        (cutoff,),
-    ).fetchall()
-    return [r["cve_id"] for r in rows]
+def get_poc_blob_shas(conn: sqlite3.Connection) -> dict[str, str | None]:
+    """The PoC file hash each checked CVE was last read at."""
+    return {r["cve_id"]: r["blob_sha"] for r in conn.execute("SELECT cve_id, blob_sha FROM poc_checks")}
 
 
-def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict]) -> None:
+def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict],
+                     blob_sha: str | None = None) -> None:
     """Replace this CVE's PoC repos with the current set (stars change, repos
     vanish) and mark it checked, whether or not any were found."""
     conn.execute("DELETE FROM cve_pocs WHERE cve_id = ?", (cve_id,))
@@ -481,9 +501,9 @@ def replace_cve_pocs(conn: sqlite3.Connection, cve_id: str, pocs: list[dict]) ->
         ],
     )
     conn.execute(
-        "INSERT INTO poc_checks (cve_id, checked_at) VALUES (?, ?) "
-        "ON CONFLICT(cve_id) DO UPDATE SET checked_at = excluded.checked_at",
-        (cve_id, datetime.now(timezone.utc).isoformat()),
+        "INSERT INTO poc_checks (cve_id, checked_at, blob_sha) VALUES (?, ?, ?) "
+        "ON CONFLICT(cve_id) DO UPDATE SET checked_at = excluded.checked_at, blob_sha = excluded.blob_sha",
+        (cve_id, datetime.now(timezone.utc).isoformat(), blob_sha),
     )
     conn.commit()
 
@@ -598,6 +618,101 @@ def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int
     return marked
 
 
+def cves_needing_record(conn: sqlite3.Connection, recheck_after_days: int,
+                        young_days: int, limit: int) -> list[str]:
+    """CVEs to read the CVE record for next: never read first, newest
+    identifier first. A record is read again only while it's young and still
+    missing a score or SSVC, because CNAs and CISA add those days after
+    publication; a rejected record is final."""
+    now = datetime.now(timezone.utc)
+    recheck = (now - timedelta(days=recheck_after_days)).isoformat()
+    young = (now - timedelta(days=young_days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT cm.cve_id, cs.rec_checked_at IS NULL AS never
+        FROM cve_mentions cm
+        LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id
+        WHERE cs.rec_checked_at IS NULL
+           OR (cs.rec_checked_at < ?
+               AND COALESCE(cs.rec_state, '') != 'REJECTED'
+               AND (cs.rec_base_score IS NULL OR cs.ssvc_exploitation IS NULL)
+               AND COALESCE(cs.rec_published, cs.nvd_published, ?) >= ?)
+        ORDER BY never DESC, cm.cve_id DESC
+        LIMIT ?
+        """,
+        (recheck, now.isoformat(), young, limit),
+    ).fetchall()
+    return [r["cve_id"] for r in rows]
+
+
+def record_cve_record(conn: sqlite3.Connection, cve_id: str, data: dict | None) -> None:
+    """What the CVE record says about one CVE. `data` is None when there is no
+    record yet (a reserved ID), which is still an answer: the check time is
+    written, so it's retried on the recheck schedule rather than every run."""
+    values = {"rec_checked_at": datetime.now(timezone.utc).isoformat()}
+    if data is None:
+        values["rec_state"] = "MISSING"
+    else:
+        values.update({
+            "rec_base_score": data.get("base_score"),
+            "rec_severity": data.get("severity"),
+            "rec_cvss_version": data.get("version"),
+            "rec_vector": data.get("vector"),
+            "rec_score_source": data.get("score_source"),
+            "rec_cwes": ", ".join(data.get("cwes", [])) or None,
+            "rec_state": data.get("state"),
+            "rec_published": data.get("published"),
+            "ssvc_exploitation": data.get("ssvc_exploitation"),
+            "ssvc_automatable": data.get("ssvc_automatable"),
+            "ssvc_technical_impact": data.get("ssvc_technical_impact"),
+        })
+        conn.execute("DELETE FROM cve_affected WHERE cve_id = ?", (cve_id,))
+        conn.executemany(
+            "INSERT INTO cve_affected (cve_id, vendor, product) VALUES (?, ?, ?)",
+            [(cve_id, v, p) for v, p in data.get("affected", [])],
+        )
+    _upsert_cve_score(conn, cve_id, values)
+    conn.commit()
+
+
+def get_cve_affected(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """(vendor, product) pairs per CVE, for the CVEs that have a record."""
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    out: dict[str, list[tuple[str, str]]] = {}
+    for r in conn.execute(
+        f"SELECT cve_id, vendor, product FROM cve_affected WHERE cve_id IN ({marks})", cve_ids
+    ):
+        out.setdefault(r["cve_id"], []).append((r["vendor"] or "", r["product"] or ""))
+    return out
+
+
+def get_small_article_titles(conn: sqlite3.Connection, cve_ids: list[str],
+                             max_cves: int = 5) -> dict[str, list[str]]:
+    """Titles of the articles naming each CVE, from articles naming at most
+    `max_cves` CVEs: the fallback for a CVE whose record lists no affected
+    product. Titles, not bodies, because a weekly report names few CVEs but
+    many vendors; its title names its subject."""
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    rows = conn.execute(
+        f"""
+        SELECT cm.cve_id, a.title FROM cve_mentions cm
+        JOIN articles a ON a.id = cm.article_id
+        WHERE cm.cve_id IN ({marks})
+          AND (SELECT COUNT(DISTINCT cm2.cve_id) FROM cve_mentions cm2
+               WHERE cm2.article_id = cm.article_id) <= ?
+        """,
+        (*cve_ids, max_cves),
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["cve_id"], []).append(r["title"] or "")
+    return out
+
+
 def get_freshness(conn: sqlite3.Connection) -> dict:
     """How current the facts are: when each lookup last ran and how much is
     still waiting. The archive is never pruned, so freshness means re-checked
@@ -610,11 +725,14 @@ def get_freshness(conn: sqlite3.Connection) -> dict:
         "last_kev_at": one("SELECT MAX(kev_checked_at) FROM cve_scores"),
         "last_nvd_at": one("SELECT MAX(nvd_checked_at) FROM cve_scores"),
         "cves_total": one("SELECT COUNT(DISTINCT cve_id) FROM cve_mentions"),
-        "cves_awaiting_nvd": one(
+        # A severity from NVD or the CVE record counts; rejected CVEs never get one.
+        "cves_awaiting_severity": one(
             "SELECT COUNT(DISTINCT cm.cve_id) FROM cve_mentions cm "
             "LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id "
-            "WHERE cs.nvd_checked_at IS NULL"),
-        "cves_with_severity": one("SELECT COUNT(*) FROM cve_scores WHERE nvd_base_score IS NOT NULL"),
+            "WHERE cs.nvd_base_score IS NULL AND cs.rec_base_score IS NULL "
+            "AND COALESCE(cs.rec_state, '') != 'REJECTED'"),
+        "cves_with_severity": one(
+            "SELECT COUNT(*) FROM cve_scores WHERE nvd_base_score IS NOT NULL OR rec_base_score IS NOT NULL"),
         "kev_listed": one("SELECT COUNT(*) FROM cve_scores WHERE kev_listed = 1"),
         "reported_exploited": one("SELECT COUNT(DISTINCT cve_id) FROM cve_exploit_reports"),
     }
@@ -632,8 +750,8 @@ def get_cve_scores(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sq
 
 def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_floor: float) -> int:
     """Promote to high ticket on facts the ingest-time rule couldn't see:
-    reported exploitation, a KEV-listed CVE, NVD 9.0+, or an EPSS percentile
-    at or above the floor. Only ever promotes."""
+    reported exploitation, a KEV-listed CVE, CVSS 9.0+ (NVD's or the CVE
+    record's), or an EPSS percentile at or above the floor. Only ever promotes."""
     cur = conn.execute(
         """
         UPDATE articles SET high_ticket = 1
@@ -645,6 +763,7 @@ def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_fl
                 JOIN cve_scores cs ON cs.cve_id = cm.cve_id
                 WHERE cs.kev_listed = 1
                    OR cs.nvd_base_score >= 9.0
+                   OR cs.rec_base_score >= 9.0
                    OR cs.epss_percentile >= ?
             )
         )

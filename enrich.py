@@ -3,6 +3,8 @@
 """Per-CVE enrichment for CVEs NekoCTI has already captured, keyed on CVE ID
 like pocs.py:
 
+  CVE record -- the CNA's or CISA's score, SSVC and affected products
+               (cverecord.py), there before NVD's analysis.
   NVD 2.0   -- the official CVSS base score, severity, vector and CWE. One
                CVE per request, rate-limited (5 per 30s unkeyed, 50 with a
                key), so runs are bounded by --limit in triage order.
@@ -25,6 +27,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+import cverecord
 import db
 import extract
 
@@ -52,6 +55,16 @@ def get_json(url: str, headers: dict | None = None, timeout: float = REQUEST_TIM
     req = urllib.request.Request(url, headers={"User-Agent": "NekoCTI", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def github_headers() -> dict:
+    """For GitHub's REST API (advisories, repository listings). 60 requests an
+    hour unauthenticated; GITHUB_TOKEN raises that to 5,000 if it's set."""
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def nvd_api_key() -> str | None:
@@ -180,13 +193,22 @@ def refresh_after_ingest(conn) -> dict:
 
 
 def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
-           do_epss: bool = True, do_kev: bool = True) -> dict:
+           do_epss: bool = True, do_kev: bool = True,
+           records_limit: int | None = None) -> dict:
+    # cverecord imports this module for get_json, so its constant is read
+    # here at call time, never at import time.
+    if records_limit is None:
+        records_limit = cverecord.POST_INGEST_LIMIT
     api_key = nvd_api_key()
     summary = {
-        "source": "CVE enrichment (NVD + EPSS + KEV)",
+        "source": "CVE enrichment (CVE record + NVD + EPSS + KEV)",
         "epss_updated": 0, "kev_listed": 0, "nvd_checked": 0, "nvd_scored": 0,
         "nvd_failed": 0, "promoted_high_ticket": 0, "nvd_key": bool(api_key),
     }
+
+    # First: the record is fast and usually has the score NVD hasn't got to.
+    if records_limit:
+        summary.update(cverecord.refresh(conn, records_limit))
 
     if do_epss:
         due = db.cves_needing_epss(conn, EPSS_RECHECK_HOURS)

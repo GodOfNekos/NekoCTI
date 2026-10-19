@@ -20,8 +20,10 @@ from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 import attack
 import auth
+import cverecord
 import db
 import enrich
+import extract
 import ingest
 
 HERE = Path(__file__).resolve().parent
@@ -38,18 +40,26 @@ def _cutoff_iso(range_key: str) -> str | None:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
-def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int) -> dict:
-    """One CVE for the dashboard: the article's claimed score, NVD's, and the
-    two exploitation signals, KEV (confirmed) and EPSS (predicted).
+def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int,
+                 affected: list[tuple[str, str]] | None = None) -> dict:
+    """One CVE for the dashboard: the article's claimed score, NVD's, the CVE
+    record's (the CNA's or CISA's, labelled), SSVC, the affected products,
+    and the two exploitation signals, KEV (confirmed) and EPSS (predicted).
     `exploit_reports` counts captured articles reporting it exploited."""
     s = score_row
+    ssvc = {k: s[f"ssvc_{k}"] for k in ("exploitation", "automatable", "technical_impact")} if s else {}
     return {
         "id": cve_id,
         "cvss": article_cvss,
         "nvd_cvss": s["nvd_base_score"] if s else None,
         "nvd_severity": s["nvd_severity"] if s else None,
         "nvd_version": s["nvd_cvss_version"] if s else None,
-        "cwes": s["nvd_cwes"] if s else None,
+        "rec_cvss": s["rec_base_score"] if s else None,
+        "rec_severity": s["rec_severity"] if s else None,
+        "rec_source": s["rec_score_source"] if s else None,
+        "ssvc": ssvc if any(ssvc.values()) else None,
+        "affected": [" ".join(filter(None, pair)) for pair in (affected or [])][:5],
+        "cwes": (s["nvd_cwes"] or s["rec_cwes"]) if s else None,
         "kev": bool(s["kev_listed"]) if s else False,
         "kev_date": s["kev_date_added"] if s else None,
         "kev_ransomware": (s["kev_ransomware"] if s else None),
@@ -102,6 +112,7 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
     _cve_ids = [c["cve_id"] for c in cves]
     _scores = db.get_cve_scores(conn, _cve_ids)
     _reports = db.get_exploit_reports(conn, _cve_ids)
+    _affected = db.get_cve_affected(conn, _cve_ids)
     data = {
         "id": row["id"],
         "title": row["title"],
@@ -113,7 +124,7 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "mentions_poc": bool(row["mentions_poc"]),
         "exploited_in_wild": bool(row["exploited_in_wild"]),
         "cves": [_cve_payload(c["cve_id"], c["cvss_score"], _scores.get(c["cve_id"]),
-                              _reports.get(c["cve_id"], 0)) for c in cves],
+                              _reports.get(c["cve_id"], 0), _affected.get(c["cve_id"])) for c in cves],
         "vendors": [v["vendor_term"] for v in vendors],
         "entities": [e["entity_name"] for e in entities],
         "campaigns": [c["campaign_name"] for c in campaigns],
@@ -278,6 +289,9 @@ def get_pocs_overview() -> dict:
         attack_techniques = db.get_cve_attack_techniques_bulk(conn, list(cve_ids))
         score_rows = db.get_cve_scores(conn, list(cve_ids))
         report_counts = db.get_exploit_reports(conn, list(cve_ids))
+        affected = db.get_cve_affected(conn, list(cve_ids))
+        # From each CVE's own record, not every vendor its articles named.
+        vendor_terms = cverecord.watchlist_terms(conn, list(cve_ids), extract.load_filters()[0])
         cves = []
         for cve_id in cve_ids:
             cvss_row = conn.execute(
@@ -304,12 +318,6 @@ def get_pocs_overview() -> dict:
                 "JOIN articles a ON a.id = cm.article_id WHERE cm.cve_id = ?",
                 (cve_id,),
             ).fetchone()
-            vendor_rows = conn.execute(
-                "SELECT DISTINCT v.vendor_term FROM cve_mentions cm "
-                "JOIN vendor_matches v ON v.article_id = cm.article_id "
-                "WHERE cm.cve_id = ? LIMIT 5",
-                (cve_id,),
-            ).fetchall()
             repo = repo_rows.get(cve_id)
             latest_activity_at = max(
                 filter(None, [latest_row["latest"], repo["latest_pushed_at"] if repo else None]),
@@ -318,7 +326,7 @@ def get_pocs_overview() -> dict:
             cves.append({
                 "cve_id": cve_id,
                 "title": title_row["title"] if title_row else None,
-                "vendors": [v["vendor_term"] for v in vendor_rows],
+                "vendors": vendor_terms.get(cve_id, [])[:5],
                 "has_public_repo": repo is not None,
                 "poc_count": repo["poc_count"] if repo else 0,
                 "max_stars": repo["max_stars"] if repo else 0,
@@ -330,7 +338,7 @@ def get_pocs_overview() -> dict:
                 "attack_techniques": attack_techniques.get(cve_id, []),
                 **{k: v for k, v in _cve_payload(
                     cve_id, cvss_row["cvss_score"] if cvss_row else None,
-                    score_rows.get(cve_id), report_counts.get(cve_id, 0),
+                    score_rows.get(cve_id), report_counts.get(cve_id, 0), affected.get(cve_id),
                 ).items() if k not in ("id", "cvss")},
             })
         cves.sort(key=lambda c: c["latest_activity_at"] or "", reverse=True)

@@ -56,9 +56,33 @@ function showView(id) {
   return document.getElementById(id);
 }
 
-// NVD's official score when enrichment has it, else the article's own claim.
+const known = (v) => v !== null && v !== undefined;
+
+// NVD's official score when enrichment has it, else the CVE record's (the
+// CNA's or CISA's), else the article's own claim.
 function cveScore(c) {
-  return c.nvd_cvss !== null && c.nvd_cvss !== undefined ? c.nvd_cvss : c.cvss;
+  if (known(c.nvd_cvss)) return c.nvd_cvss;
+  if (known(c.rec_cvss)) return c.rec_cvss;
+  return c.cvss;
+}
+
+// Where the shown score came from: "" for NVD, which is the default.
+function cveScoreSource(c) {
+  if (known(c.nvd_cvss)) return "";
+  if (known(c.rec_cvss)) return c.rec_source === "CNA" ? "CNA" : "CISA";
+  return known(c.cvss) ? "ARTICLE" : "";
+}
+
+function cveSeverity(c) {
+  return known(c.nvd_cvss) ? c.nvd_severity : known(c.rec_cvss) ? c.rec_severity : null;
+}
+
+// "(9.8 CNA)", or "(9.8)" for NVD.
+function scoreLabel(c) {
+  const score = cveScore(c);
+  if (!known(score)) return "";
+  const src = cveScoreSource(c);
+  return `${esc(score)}${src ? ` ${src}` : ""}`;
 }
 
 // KEV is CISA confirming use, an exploit report is our own coverage saying
@@ -79,7 +103,7 @@ function formatMeta(article) {
   if (article.cves.length === 1) {
     const c = article.cves[0];
     const score = cveScore(c);
-    const label = score ? `<span class="${score >= 9 ? "cve-crit" : ""}">${esc(c.id)} (${esc(score)})</span>` : esc(c.id);
+    const label = known(score) ? `<span class="${score >= 9 ? "cve-crit" : ""}">${esc(c.id)} (${scoreLabel(c)})</span>` : esc(c.id);
     bits.push([label, exploitTags(c)].filter(Boolean).join(" "));
   } else if (article.cves.length > 1) {
     const scores = article.cves.map(cveScore).filter((s) => s !== null && s !== undefined);
@@ -203,16 +227,23 @@ async function openReader(id) {
   if (article.cves.length) {
     metaParts.push(article.cves.map((c) => {
       const score = cveScore(c);
-      const sev = c.nvd_severity ? ` ${c.nvd_severity}` : "";
-      const base = score ? `${c.id} (${score}${sev})` : c.id;
+      const sev = cveSeverity(c) ? ` ${cveSeverity(c)}` : "";
+      const src = cveScoreSource(c);
+      const base = known(score) ? `${c.id} (${score}${sev}${src ? ` ${src}` : ""})` : c.id;
       const tags = [];
       if (c.kev) tags.push(`KEV${c.kev_date ? ` ${c.kev_date}` : ""}${c.kev_ransomware === "Known" ? ", RANSOMWARE" : ""}`);
       else if (c.exploit_reports) tags.push("EXPLOITATION REPORTED");
       if (c.epss_percentile !== null && c.epss_percentile !== undefined) {
         tags.push(`EPSS ${(c.epss_percentile * 100).toFixed(0)}th`);
       }
+      // CISA's SSVC decision points, as CISA words them.
+      if (c.ssvc) tags.push(`SSVC ${["exploitation", "automatable", "technical_impact"].map((k) => c.ssvc[k] || "?").join("/").toUpperCase()}`);
       return tags.length ? `${base} [${tags.join(" / ")}]` : base;
     }).join(", "));
+    const affected = [...new Set(article.cves.flatMap((c) => c.affected || []))];
+    if (affected.length) {
+      metaParts.push(`AFFECTED: ${affected.slice(0, 6).join(", ")}${affected.length > 6 ? ` +${affected.length - 6} more` : ""}`);
+    }
   }
   if (article.vendors.length) metaParts.push(`VENDORS: ${article.vendors.join(", ")}`);
   if (article.entities.length) metaParts.push(`TRACKED: ${article.entities.join(", ")}`);
@@ -449,7 +480,7 @@ async function renderPocsOverview() {
     return `
     <div class="row poc-row" data-cve="${esc(c.cve_id)}" data-search="${esc(search)}">
       <span class="title">
-        ${esc(c.cve_id)}${score ? ` <span class="${score >= 9 ? "cve-crit" : ""}">(CVSS ${esc(score)}${c.nvd_severity ? ` ${esc(c.nvd_severity)}` : ""})</span>` : ""}
+        ${esc(c.cve_id)}${known(score) ? ` <span class="${score >= 9 ? "cve-crit" : ""}">(CVSS ${scoreLabel(c)}${cveSeverity(c) ? ` ${esc(cveSeverity(c))}` : ""})</span>` : ""}
         ${exploitTags(c) ? ` ${exploitTags(c)}` : ""}
         ${c.title ? `<div class="poc-cve-desc">${esc(c.title)}</div>` : ""}
         ${c.vendors.length ? `<div class="poc-cve-vendors">${c.vendors.map(esc).join(", ")}</div>` : ""}
@@ -843,8 +874,8 @@ function ago(iso) {
 function renderFreshness(f) {
   const el = document.getElementById("freshness-line");
   if (!el || !f) return;
-  const waiting = f.cves_awaiting_nvd
-    ? ` &middot; <span class="fresh-warn">${esc(f.cves_awaiting_nvd)} CVE${f.cves_awaiting_nvd === 1 ? "" : "s"} awaiting severity</span>`
+  const waiting = f.cves_awaiting_severity
+    ? ` &middot; <span class="fresh-warn">${esc(f.cves_awaiting_severity)} CVE${f.cves_awaiting_severity === 1 ? "" : "s"} awaiting severity</span>`
     : "";
   el.innerHTML =
     `LAST CHECK ${ago(f.last_article_fetched_at)}` +
@@ -858,7 +889,7 @@ function renderFreshness(f) {
   // the warn class keeps an awaiting-severity backlog visible meanwhile.
   const agoEl = document.getElementById("footer-ago");
   if (agoEl) agoEl.textContent = ` · ${ago(f.last_article_fetched_at).toUpperCase()}`;
-  document.getElementById("footer-status-wrap")?.classList.toggle("has-warn", Boolean(f.cves_awaiting_nvd));
+  document.getElementById("footer-status-wrap")?.classList.toggle("has-warn", Boolean(f.cves_awaiting_severity));
 }
 
 async function refreshFreshness() {
@@ -901,7 +932,7 @@ async function pollIngestStatus() {
     const e = status.enrich;
     const extra = status.enrich_error
       ? ", REFRESH FAILED"
-      : e ? `, ${e.nvd_scored || 0} SEVERITY, ${e.epss_updated || 0} EPSS` : "";
+      : e ? `, ${(e.nvd_scored || 0) + (e.records_scored || 0)} SEVERITY, ${e.epss_updated || 0} EPSS` : "";
     setRunCheckIdle(`DONE (+${totalNew} NEW${extra})`);
     refresh();
   } else {
