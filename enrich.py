@@ -5,6 +5,8 @@ like pocs.py:
 
   CVE record -- the CNA's or CISA's score, SSVC and affected products
                (cverecord.py), there before NVD's analysis.
+  Coverage  -- Nuclei templates, Metasploit exploit modules and Sigma
+               rules per CVE (coverage.py).
   NVD 2.0   -- the official CVSS base score, severity, vector and CWE. One
                CVE per request, rate-limited (5 per 30s unkeyed, 50 with a
                key), so runs are bounded by --limit in triage order.
@@ -27,9 +29,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+import coverage
 import cverecord
 import db
 import extract
+import priority
 
 NVD_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 EPSS_URL = "https://api.first.org/data/v1/epss"
@@ -44,9 +48,6 @@ NVD_DEFAULT_LIMIT = 200
 # Just inside NVD's limits, because being throttled costs more than pacing.
 NVD_DELAY_WITH_KEY_S = 0.7
 NVD_DELAY_NO_KEY_S = 6.5
-
-# The top 5% most likely to be exploited promotes an article to high ticket.
-HIGH_TICKET_EPSS_PERCENTILE = 0.95
 
 
 def get_json(url: str, headers: dict | None = None, timeout: float = REQUEST_TIMEOUT_S):
@@ -183,7 +184,7 @@ def refresh_after_ingest(conn) -> dict:
     re-verified, not just re-listed. EPSS and KEV are cheap and always run;
     NVD is bounded, newest arrivals and high ticket first."""
     # First, so newly found mentions are scored in this same pass.
-    mentions = db.backfill_cve_mentions(conn, extract.extract_cves, extract.is_high_ticket)
+    mentions = db.backfill_cve_mentions(conn, extract.extract_cves)
     stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
     summary = enrich(conn, nvd_limit=POST_INGEST_NVD_LIMIT)
     summary["mentions_added"] = mentions["mentions_added"]
@@ -194,7 +195,7 @@ def refresh_after_ingest(conn) -> dict:
 
 def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
            do_epss: bool = True, do_kev: bool = True,
-           records_limit: int | None = None) -> dict:
+           records_limit: int | None = None, do_coverage: bool = True) -> dict:
     # cverecord imports this module for get_json, so its constant is read
     # here at call time, never at import time.
     if records_limit is None:
@@ -203,12 +204,16 @@ def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
     summary = {
         "source": "CVE enrichment (CVE record + NVD + EPSS + KEV)",
         "epss_updated": 0, "kev_listed": 0, "nvd_checked": 0, "nvd_scored": 0,
-        "nvd_failed": 0, "promoted_high_ticket": 0, "nvd_key": bool(api_key),
+        "nvd_failed": 0, "nvd_key": bool(api_key),
     }
 
     # First: the record is fast and usually has the score NVD hasn't got to.
     if records_limit:
         summary.update(cverecord.refresh(conn, records_limit))
+
+    # Nuclei, Metasploit and Sigma: three listings, re-read at most daily.
+    if do_coverage:
+        summary.update(coverage.refresh(conn))
 
     if do_epss:
         due = db.cves_needing_epss(conn, EPSS_RECHECK_HOURS)
@@ -236,7 +241,7 @@ def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
                     summary["nvd_scored"] += 1
             time.sleep(delay)
 
-    summary["promoted_high_ticket"] = db.refresh_high_ticket_from_scores(
-        conn, HIGH_TICKET_EPSS_PERCENTILE)
+    # Last, so it scores on everything above: sets every priority and high_ticket.
+    summary.update(priority.recompute(conn))
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()
     return summary

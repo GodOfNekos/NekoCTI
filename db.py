@@ -157,6 +157,31 @@ CREATE TABLE IF NOT EXISTS cve_affected (
 );
 CREATE INDEX IF NOT EXISTS cve_affected_cve ON cve_affected(cve_id);
 
+-- Nuclei templates, Metasploit exploit modules and Sigma rules per captured
+-- CVE (coverage.py), as links. Each kind is replaced whole when its listing
+-- is re-read; coverage_refreshes says when, even if nothing matched.
+CREATE TABLE IF NOT EXISTS cve_coverage (
+    cve_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    link TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cve_coverage_cve ON cve_coverage(cve_id);
+
+-- Each CVE's priority (priority.py): score, band and the evidence behind it
+-- as a JSON list, replaced whole on every check.
+CREATE TABLE IF NOT EXISTS cve_priority (
+    cve_id TEXT PRIMARY KEY,
+    score INTEGER NOT NULL,
+    band TEXT NOT NULL,
+    why TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS coverage_refreshes (
+    kind TEXT PRIMARY KEY,
+    refreshed_at TEXT NOT NULL
+);
+
 -- Which CVE a piece of coverage claims is exploited, and from which article.
 CREATE TABLE IF NOT EXISTS cve_exploit_reports (
     cve_id TEXT NOT NULL,
@@ -219,6 +244,11 @@ _MIGRATIONS = [
     # The PoC-in-GitHub file's git blob hash when last read (pocs.py), "" for
     # "no file"; an unchanged hash means nothing to fetch.
     ("poc_checks", "blob_sha", "TEXT"),
+    # The priority score (priority.py), recomputed every check. high_ticket
+    # is derived from the band.
+    ("articles", "priority_score", "INTEGER NOT NULL DEFAULT 0"),
+    ("articles", "priority_band", "TEXT"),
+    ("articles", "priority_why", "TEXT"),
 ]
 
 
@@ -350,20 +380,20 @@ def backfill_exploited_in_wild(conn: sqlite3.Connection, evidence_fn) -> dict:
 STRUCTURED_SOURCES = ("CISA KEV", "GitHub Security Advisories")
 
 
-def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn, high_ticket_fn) -> dict:
+def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn) -> dict:
     """Re-scan stored articles with the current CVE extractor and add any new
-    mention. Only ever adds: existing mentions and scores are kept, and
-    high_ticket is only raised."""
+    mention. Only ever adds: existing mentions and scores are kept.
+    high_ticket is left to the priority score (priority.py)."""
     existing: dict[int, set[str]] = {}
     for row in conn.execute("SELECT article_id, cve_id FROM cve_mentions"):
         existing.setdefault(row["article_id"], set()).add(row["cve_id"])
     rows = conn.execute(
-        "SELECT a.id, a.description, a.full_text, a.high_ticket FROM articles a "
+        "SELECT a.id, a.description, a.full_text FROM articles a "
         "JOIN sources s ON s.id = a.source_id "
         f"WHERE s.name NOT IN ({', '.join('?' for _ in STRUCTURED_SOURCES)})",
         STRUCTURED_SOURCES,
     ).fetchall()
-    stats = {"mentions_added": 0, "articles_changed": 0, "promoted_high_ticket": 0, "cves": set()}
+    stats = {"mentions_added": 0, "articles_changed": 0, "cves": set()}
     for row in rows:
         found = extract_fn(row["full_text"] or row["description"] or "")
         new = [(cve_id, score) for cve_id, score in found
@@ -377,9 +407,6 @@ def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn, high_ticket_fn) 
         stats["mentions_added"] += len(new)
         stats["articles_changed"] += 1
         stats["cves"].update(cve_id for cve_id, _ in new)
-        if not row["high_ticket"] and high_ticket_fn(new):
-            conn.execute("UPDATE articles SET high_ticket = 1 WHERE id = ?", (row["id"],))
-            stats["promoted_high_ticket"] += 1
     conn.commit()
     stats["distinct_cves"] = len(stats.pop("cves"))
     return stats
@@ -713,6 +740,51 @@ def get_small_article_titles(conn: sqlite3.Connection, cve_ids: list[str],
     return out
 
 
+def replace_coverage(conn: sqlite3.Connection, kind: str, rows: list[tuple[str, str, str]]) -> None:
+    """Every (cve_id, ref, link) of one kind, replacing the previous set."""
+    conn.execute("DELETE FROM cve_coverage WHERE kind = ?", (kind,))
+    conn.executemany("INSERT INTO cve_coverage (cve_id, kind, ref, link) VALUES (?, ?, ?, ?)",
+                     [(cve, kind, ref, link) for cve, ref, link in rows])
+    conn.execute(
+        "INSERT INTO coverage_refreshes (kind, refreshed_at) VALUES (?, ?) "
+        "ON CONFLICT(kind) DO UPDATE SET refreshed_at = excluded.refreshed_at",
+        (kind, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+
+
+def get_coverage_refreshed_at(conn: sqlite3.Connection) -> dict[str, str]:
+    return {r["kind"]: r["refreshed_at"] for r in conn.execute("SELECT kind, refreshed_at FROM coverage_refreshes")}
+
+
+def get_cve_coverage(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, list[dict]]:
+    """[{kind, ref, link}] per CVE."""
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    out: dict[str, list[dict]] = {}
+    for r in conn.execute(
+        f"SELECT cve_id, kind, ref, link FROM cve_coverage WHERE cve_id IN ({marks}) ORDER BY kind, ref", cve_ids
+    ):
+        out.setdefault(r["cve_id"], []).append({"kind": r["kind"], "ref": r["ref"], "link": r["link"]})
+    return out
+
+
+def get_poc_flags(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, tuple[bool, bool]]:
+    """(has a public PoC repo, coverage describes a PoC) per CVE, the second
+    only from articles naming 5 or fewer CVEs."""
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    repos = {r[0] for r in conn.execute(f"SELECT DISTINCT cve_id FROM cve_pocs WHERE cve_id IN ({marks})", cve_ids)}
+    mentioned = {r[0] for r in conn.execute(
+        f"SELECT DISTINCT cm.cve_id FROM cve_mentions cm JOIN articles a ON a.id = cm.article_id "
+        f"WHERE cm.cve_id IN ({marks}) AND a.mentions_poc = 1 "
+        f"AND (SELECT COUNT(DISTINCT cm2.cve_id) FROM cve_mentions cm2 WHERE cm2.article_id = a.id) <= 5",
+        cve_ids)}
+    return {c: (c in repos, c in mentioned) for c in cve_ids}
+
+
 def get_freshness(conn: sqlite3.Connection) -> dict:
     """How current the facts are: when each lookup last ran and how much is
     still waiting. The archive is never pruned, so freshness means re-checked
@@ -748,30 +820,27 @@ def get_cve_scores(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sq
     return {r["cve_id"]: r for r in rows}
 
 
-def refresh_high_ticket_from_scores(conn: sqlite3.Connection, epss_percentile_floor: float) -> int:
-    """Promote to high ticket on facts the ingest-time rule couldn't see:
-    reported exploitation, a KEV-listed CVE, CVSS 9.0+ (NVD's or the CVE
-    record's), or an EPSS percentile at or above the floor. Only ever promotes."""
-    cur = conn.execute(
-        """
-        UPDATE articles SET high_ticket = 1
-        WHERE high_ticket = 0 AND (
-            exploited_in_wild = 1
-            OR id IN (SELECT article_id FROM cve_exploit_reports)
-            OR id IN (
-                SELECT cm.article_id FROM cve_mentions cm
-                JOIN cve_scores cs ON cs.cve_id = cm.cve_id
-                WHERE cs.kev_listed = 1
-                   OR cs.nvd_base_score >= 9.0
-                   OR cs.rec_base_score >= 9.0
-                   OR cs.epss_percentile >= ?
-            )
-        )
-        """,
-        (epss_percentile_floor,),
+def replace_cve_priority(conn: sqlite3.Connection, rows: list[tuple[str, int, str, str]]) -> None:
+    """Every (cve_id, score, band, why JSON), replacing the previous set."""
+    conn.execute("DELETE FROM cve_priority")
+    conn.executemany("INSERT INTO cve_priority (cve_id, score, band, why) VALUES (?, ?, ?, ?)", rows)
+    conn.commit()
+
+
+def set_article_priorities(conn: sqlite3.Connection, rows: list[tuple[int, str, str, int, int]]) -> None:
+    """(score, band, why JSON, high_ticket, article id) for each article."""
+    conn.executemany(
+        "UPDATE articles SET priority_score = ?, priority_band = ?, priority_why = ?, high_ticket = ? WHERE id = ?",
+        rows,
     )
     conn.commit()
-    return cur.rowcount
+
+
+def get_cve_priority(conn: sqlite3.Connection, cve_ids: list[str]) -> dict[str, sqlite3.Row]:
+    if not cve_ids:
+        return {}
+    marks = ", ".join("?" for _ in cve_ids)
+    return {r["cve_id"]: r for r in conn.execute(f"SELECT * FROM cve_priority WHERE cve_id IN ({marks})", cve_ids)}
 
 
 def get_pocs_summary(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -19,21 +19,25 @@ Written by Cameron Gates (GodOfNekos). Free software under the GNU Affero Genera
   | Signal | Source | Means |
   |---|---|---|
   | Severity | NVD 2.0, else the CVE Record | The official CVSS score; until NVD has analysed a CVE, the CNA's own (or CISA's), labelled as such. |
-  | Affected products | the CVE Record | Every vendor and product the CNA lists. This, not the articles, links a CVE to your watchlist on the POCS tab. |
+  | Affected products | the CVE Record | Every vendor and product the CNA lists. This, not the articles, links a CVE to your watchlist. |
   | SSVC | CISA, in the CVE Record | CISA's decision points: exploitation (none, PoC, active), automatable, technical impact. |
   | Exploited (confirmed) | CISA KEV | Exploited in the wild, per CISA, with the date added and ransomware use. |
   | Exploited (reported) | captured coverage | An article states the CVE is being exploited, often days before KEV lists it. |
   | Likelihood | FIRST.org EPSS | Predicted probability of exploitation in the next 30 days. |
+  | Exploit and detection coverage | Metasploit, Nuclei, SigmaHQ | Whether a working exploit, a scanner template or a detection rule exists, with links. |
 
-  A public proof-of-concept is a separate fact: exploit code exists, which says nothing
-  about use.
-- **High ticket:** anything at CVSS 9.0+ (NVD's or the CVE Record's), KEV-listed, reported
-  exploited, at or above the 95th EPSS percentile, or a critical GitHub advisory, whatever the
-  vendor.
+  Exploit maturity sums these up: ATTACKED, FUNCTIONAL (a Metasploit exploit or Nuclei template),
+  POC, or UNPROVEN.
+- **Priority:** every CVE and article gets a band (CRITICAL, HIGH, MEDIUM, LOW) from named rules,
+  and the reader shows which rules fired and why. The strongest rule sets the band; a watchlist
+  vendor lifts it one. Severity alone reaches MEDIUM at most, and a CVE an article only mentions
+  in passing counts at MEDIUM at most for that article. HIGH TICKET is band HIGH or above,
+  recomputed on every check, strongest and newest first.
 - **ATT&CK mapping** by a local LLM through [Ollama](https://ollama.com). Every technique ID it
   returns is checked against the real ATT&CK catalogue, and anything invented is dropped.
 - **Nothing is deleted for age.** Every check re-verifies the facts instead (EPSS, KEV,
-  exploitation reporting and new severities), and the footer shows how current they are.
+  exploitation reporting, new severities and coverage), and the footer shows how current they are.
+  An old exploitation claim lowers a priority; it never removes anything.
 - **Optional daily digest:** a one-line-per-article summary appended to a Markdown daily note.
 
 ## Stack

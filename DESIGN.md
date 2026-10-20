@@ -140,8 +140,8 @@ The palette is a single accent against a dark neutral, plus two status colors re
 - **Device Frame** (`linear-gradient(160deg, #1a1d16 0%, #0d0f0b 100%)` on `#000` page background): the bezel around the screen; the only place a gradient or shadow appears in the whole system.
 
 ### Status
-- **Amber** (`#ffb347`): reserved, defined at the token level, used sparingly for secondary status signaling.
-- **Signal Red** (`#ff5c4d`): critical/error signal - CVSS-critical values in list rows, and every fetch-failure error state across the app.
+- **Amber** (`#ffb347`): secondary status, used sparingly: the HIGH priority band and the FUNCTIONAL EXPLOIT tag (a weaponised exploit or scanner exists, not yet seen used).
+- **Signal Red** (`#ff5c4d`): critical/error signal - CVSS-critical values in list rows, the KEV tag, the CRITICAL priority band, and every fetch-failure error state across the app.
 
 ### Named Rules
 **The One Accent Rule.** Phosphor green is the only interactive/brand color in the system. Nothing else earns a hover, focus, or selected treatment in a second hue - amber and red are status-only and never used for navigation or emphasis.
@@ -212,6 +212,13 @@ Corners are close to square throughout: rows and inputs use a 2px hairline radiu
 - **Hover:** unselected rows tint with the green-wash background; selected rows do not restate hover.
 - **Selected:** the Inversion Rule - full green background, olive-black text, meta opacity raised to 1, and a CVSS-critical value inside a selected row switches to a dark red-on-green rather than the default bright red-on-dark.
 - **Phone and tablet:** title stacks above meta instead of sitting side by side, and the bullet aligns to the first title line.
+
+### Status Tags and Priority Bands (added 19 October 2026)
+- **Shape:** 10px uppercase, 1px outline, 2px radius, inline in row meta. Only KEV is filled (signal red), because CISA-confirmed exploitation is the one fact that outranks everything.
+- **Priority band:** the first item in every row's meta. CRITICAL outlines in signal red, HIGH in amber, MEDIUM and LOW at 0.55 opacity in green; NONE shows nothing.
+- **Exploitation and coverage:** EXPLOITED REPORTED (red outline), FUNCTIONAL EXPLOIT (amber outline), and MSF / NUCLEI / SIGMA and EPSS (green outline at 0.55 opacity).
+- **Selected rows:** CRITICAL, HIGH and FUNCTIONAL switch to olive-black on the green fill, per the Inversion Rule, rather than adding a darker shade of their own hue.
+- **Reader:** under the meta line, links to each Metasploit module, Nuclei template and Sigma rule for the article's CVEs, then a `// WHY <BAND>` list of the rules that fired, strongest first. The coverage links are 44px tap rows below 1024px, per the Touch Floor Rule; the WHY list is plain text.
 
 ### Cards (Entity Cards, Term Chips)
 - **Corner Style:** square-to-hairline; no fill at rest, thin green border only.

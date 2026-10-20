@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 import attack
 import auth
+import coverage
 import cverecord
 import db
 import enrich
@@ -41,14 +42,23 @@ def _cutoff_iso(range_key: str) -> str | None:
 
 
 def _cve_payload(cve_id: str, article_cvss, score_row, report_count: int,
-                 affected: list[tuple[str, str]] | None = None) -> dict:
+                 affected: list[tuple[str, str]] | None = None,
+                 coverage_rows: list[dict] | None = None, poc_flags: tuple[bool, bool] = (False, False)) -> dict:
     """One CVE for the dashboard: the article's claimed score, NVD's, the CVE
     record's (the CNA's or CISA's, labelled), SSVC, the affected products,
-    and the two exploitation signals, KEV (confirmed) and EPSS (predicted).
+    the two exploitation signals, KEV (confirmed) and EPSS (predicted), and
+    exploit maturity with the Nuclei, Metasploit and Sigma links behind it.
     `exploit_reports` counts captured articles reporting it exploited."""
     s = score_row
     ssvc = {k: s[f"ssvc_{k}"] for k in ("exploitation", "automatable", "technical_impact")} if s else {}
+    coverage_rows = coverage_rows or []
+    kinds = {r["kind"] for r in coverage_rows}
+    maturity = coverage.exploit_maturity(bool(s and s["kev_listed"]), report_count > 0, kinds, *poc_flags)
     return {
+        "maturity": maturity,
+        # A few links per kind is plenty; Nuclei has dozens for some CVEs.
+        "coverage": [r for k in ("metasploit", "nuclei", "sigma")
+                     for r in [x for x in coverage_rows if x["kind"] == k][:3]],
         "id": cve_id,
         "cvss": article_cvss,
         "nvd_cvss": s["nvd_base_score"] if s else None,
@@ -113,6 +123,8 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
     _scores = db.get_cve_scores(conn, _cve_ids)
     _reports = db.get_exploit_reports(conn, _cve_ids)
     _affected = db.get_cve_affected(conn, _cve_ids)
+    _coverage = db.get_cve_coverage(conn, _cve_ids)
+    _poc = db.get_poc_flags(conn, _cve_ids)
     data = {
         "id": row["id"],
         "title": row["title"],
@@ -120,11 +132,15 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
         "published_at": row["published_at"],
         "fetched_at": row["fetched_at"],
         "high_ticket": bool(row["high_ticket"]),
+        "priority_band": row["priority_band"] or "NONE",
+        "priority_score": row["priority_score"],
+        "priority_why": json.loads(row["priority_why"] or "[]"),
         "is_breach": bool(row["is_breach"]),
         "mentions_poc": bool(row["mentions_poc"]),
         "exploited_in_wild": bool(row["exploited_in_wild"]),
         "cves": [_cve_payload(c["cve_id"], c["cvss_score"], _scores.get(c["cve_id"]),
-                              _reports.get(c["cve_id"], 0), _affected.get(c["cve_id"])) for c in cves],
+                              _reports.get(c["cve_id"], 0), _affected.get(c["cve_id"]),
+                              _coverage.get(c["cve_id"]), _poc.get(c["cve_id"], (False, False))) for c in cves],
         "vendors": [v["vendor_term"] for v in vendors],
         "entities": [e["entity_name"] for e in entities],
         "campaigns": [c["campaign_name"] for c in campaigns],
@@ -143,10 +159,8 @@ def _serialize_article(conn, row, include_body: bool = False) -> dict:
 
 _TAB_FILTERS = {
     "high_ticket": ["high_ticket = 1"],
-    "watchlist": [
-        "high_ticket = 0",
-        "EXISTS (SELECT 1 FROM vendor_matches v WHERE v.article_id = articles.id)",
-    ],
+    # Every watchlist match, high ticket or not (Neko, 19 October 2026).
+    "watchlist": ["EXISTS (SELECT 1 FROM vendor_matches v WHERE v.article_id = articles.id)"],
     "entities": ["EXISTS (SELECT 1 FROM entity_matches e WHERE e.article_id = articles.id)"],
     "campaigns": ["EXISTS (SELECT 1 FROM campaign_matches c WHERE c.article_id = articles.id)"],
     "breaches": ["is_breach = 1"],
@@ -177,8 +191,12 @@ def get_articles(tab: str, range_key: str) -> dict:
             params.append(cutoff)
 
         clause = f"WHERE {' AND '.join(where)}" if where else ""
+        # HIGH TICKET is a priority list: strongest band first, newest first
+        # within it (the score's nudges reward articles that mention a lot,
+        # which isn't the same as mattering more). The rest read by date.
+        order = "priority_score / 100 DESC, published_at DESC" if tab == "high_ticket" else "published_at DESC"
         rows = conn.execute(
-            f"SELECT * FROM articles {clause} ORDER BY published_at DESC LIMIT 300",
+            f"SELECT * FROM articles {clause} ORDER BY {order} LIMIT 300",
             params,
         ).fetchall()
 
@@ -290,6 +308,8 @@ def get_pocs_overview() -> dict:
         score_rows = db.get_cve_scores(conn, list(cve_ids))
         report_counts = db.get_exploit_reports(conn, list(cve_ids))
         affected = db.get_cve_affected(conn, list(cve_ids))
+        coverage_rows = db.get_cve_coverage(conn, list(cve_ids))
+        poc_flags = db.get_poc_flags(conn, list(cve_ids))
         # From each CVE's own record, not every vendor its articles named.
         vendor_terms = cverecord.watchlist_terms(conn, list(cve_ids), extract.load_filters()[0])
         cves = []
@@ -339,6 +359,7 @@ def get_pocs_overview() -> dict:
                 **{k: v for k, v in _cve_payload(
                     cve_id, cvss_row["cvss_score"] if cvss_row else None,
                     score_rows.get(cve_id), report_counts.get(cve_id, 0), affected.get(cve_id),
+                    coverage_rows.get(cve_id), poc_flags.get(cve_id, (False, False)),
                 ).items() if k not in ("id", "cvss")},
             })
         cves.sort(key=lambda c: c["latest_activity_at"] or "", reverse=True)

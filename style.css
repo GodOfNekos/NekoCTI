@@ -538,6 +538,21 @@ a.chip-action { color: inherit; text-decoration: none; }
 }
 .reader-source-link:hover { opacity: 1; text-decoration: underline; }
 
+/* Under the reader's meta line: links to the Nuclei templates, Metasploit
+   modules and Sigma rules for the article's CVEs, then the priority rules
+   that fired. Defined before the media queries so their overrides win. */
+.reader-coverage {
+  padding: 0 30px 12px; display: flex; flex-wrap: wrap; gap: 6px 18px;
+  font-size: 13px; opacity: 0.85;
+}
+.reader-coverage a { color: var(--green); text-decoration: none; overflow-wrap: anywhere; }
+.reader-coverage a:hover { text-decoration: underline; }
+.reader-why {
+  padding: 0 30px 12px; display: flex; flex-direction: column; gap: 2px;
+  font-size: 13px; opacity: 0.85;
+}
+.reader-why .section-label { padding: 0 0 2px; }
+
 /* Real MITRE ATT&CK matrix - tactics as columns, techniques as rows.
    :not([hidden]) for the same reason as .reader-overlay/.list above. */
 .attack-view:not([hidden]) {
@@ -823,6 +838,9 @@ button.row {
   .reader-body { flex: 3 1 0; min-width: 0; padding: 18px 20px 32px; overflow-wrap: anywhere; }
   .reader-images { flex: 2 1 0; min-width: 220px; padding: 18px 16px 32px; }
   .reader-source-link { min-height: 44px; display: inline-flex; align-items: center; margin: 0 16px 8px; }
+  .reader-coverage { padding: 0 16px 10px; gap: 0 16px; }
+  .reader-why { padding: 0 16px 10px; overflow-wrap: anywhere; }
+  .reader-coverage a { min-height: 44px; display: inline-flex; align-items: center; }
   .image-lightbox:not([hidden]) { padding: 64px 12px 12px; }
   .image-lightbox .reader-close { top: max(12px, env(safe-area-inset-top)); right: 12px; }
 
@@ -887,13 +905,26 @@ button.row {
    questions: KEV is CISA confirming use (solid danger pill), WILD is our
    coverage reporting it (outlined), EPSS is a forecast (dimmest). A public
    PoC is a fourth thing: code exists, which says nothing about use. */
-.tag-kev, .tag-wild, .tag-epss {
+.tag-kev, .tag-wild, .tag-epss, .tag-func, .tag-cov {
   font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
   padding: 1px 5px; border-radius: 2px; margin-left: 4px; white-space: nowrap;
 }
 .tag-kev { background: var(--danger); color: var(--bg); font-weight: bold; }
 .tag-wild { border: 1px solid var(--danger); color: var(--danger); }
-.tag-epss { border: 1px solid currentColor; opacity: 0.55; }
+.tag-epss, .tag-cov { border: 1px solid currentColor; opacity: 0.55; }
+/* A weaponised exploit or scanner exists: status, so amber. */
+.tag-func { border: 1px solid var(--amber); color: var(--amber); }
+.row.selected .tag-func { border-color: var(--bg); color: var(--bg); }
+
+/* Priority band on each row (the rules behind it are in the reader). */
+.band {
+  font-size: 10px; letter-spacing: 0.06em; padding: 1px 5px; border-radius: 2px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.band-crit { color: var(--danger); }
+.band-high { color: var(--amber); }
+.band-dim { opacity: 0.55; }
+.row.selected .band-crit, .row.selected .band-high { color: var(--bg); }
 .row.selected .tag-kev { background: #7a0d00; }
 .row.selected .tag-wild { border-color: #7a0d00; color: #7a0d00; }
 

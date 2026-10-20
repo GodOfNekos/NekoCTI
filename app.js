@@ -95,11 +95,25 @@ function exploitTags(c) {
     const stale = c.epss_stale ? ` <span class="tag-stale" title="EPSS from ${esc(c.epss_date)}, refreshed on the next check">STALE</span>` : "";
     tags.push(`<span class="tag-epss">EPSS ${(c.epss_percentile * 100).toFixed(0)}th</span>${stale}`);
   }
+  // A Metasploit exploit or Nuclei template exists: weaponised, not yet seen used.
+  if (c.maturity === "FUNCTIONAL") tags.push(`<span class="tag-func">FUNCTIONAL EXPLOIT</span>`);
+  const kinds = new Set((c.coverage || []).map((r) => r.kind));
+  for (const [kind, label] of COVERAGE_LABELS) {
+    if (kinds.has(kind)) tags.push(`<span class="tag-cov">${label}</span>`);
+  }
   return tags.join(" ");
 }
 
+const COVERAGE_LABELS = [["metasploit", "MSF"], ["nuclei", "NUCLEI"], ["sigma", "SIGMA"]];
+
+// The priority band (priority.py): red for CRITICAL, amber for HIGH, dim below.
+const BAND_CLASS = { CRITICAL: "band-crit", HIGH: "band-high", MEDIUM: "band-dim", LOW: "band-dim" };
+function bandChip(band) {
+  return BAND_CLASS[band] ? `<span class="band ${BAND_CLASS[band]}">${esc(band)}</span>` : "";
+}
+
 function formatMeta(article) {
-  const bits = [];
+  const bits = [bandChip(article.priority_band)];
   if (article.cves.length === 1) {
     const c = article.cves[0];
     const score = cveScore(c);
@@ -238,6 +252,7 @@ async function openReader(id) {
       }
       // CISA's SSVC decision points, as CISA words them.
       if (c.ssvc) tags.push(`SSVC ${["exploitation", "automatable", "technical_impact"].map((k) => c.ssvc[k] || "?").join("/").toUpperCase()}`);
+      if (c.maturity && c.maturity !== "UNPROVEN") tags.push(`MATURITY ${c.maturity}`);
       return tags.length ? `${base} [${tags.join(" / ")}]` : base;
     }).join(", "));
     const affected = [...new Set(article.cves.flatMap((c) => c.affected || []))];
@@ -269,10 +284,22 @@ async function openReader(id) {
     </div>
   ` : "";
   const link = safeUrl(article.link);
+  const labels = Object.fromEntries(COVERAGE_LABELS);
+  const coverageLinks = article.cves.flatMap((c) => (c.coverage || []).map((r) => {
+    const href = safeUrl(r.link);
+    const text = `${labels[r.kind] || esc(r.kind)} ${esc(c.id)}: ${esc(r.ref.split("/").pop())}`;
+    return href ? `<a href="${href}" target="_blank" rel="noopener noreferrer">${text} &rarr;</a>` : "";
+  })).filter(Boolean);
 
   overlay.innerHTML = `
     ${readerHeader(article.title, "reader-close-btn", "CLOSE")}
     <div class="reader-meta">${metaParts.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
+    ${coverageLinks.length ? `<div class="reader-coverage">${coverageLinks.join("")}</div>` : ""}
+    ${(article.priority_why || []).length ? `
+      <div class="reader-why">
+        <span class="section-label">// WHY ${esc(article.priority_band)}</span>
+        ${article.priority_why.map((w) => `<span>${esc(w)}</span>`).join("")}
+      </div>` : ""}
     <div class="reader-main">
       <div class="reader-body">${renderArticleBody(article.body)}</div>
       ${imagesHtml}

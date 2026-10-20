@@ -129,10 +129,9 @@ def cmd_enrich(args: argparse.Namespace) -> None:
     conn = db.connect()
     try:
         if not args.no_backfill:
-            added = db.backfill_cve_mentions(conn, extract.extract_cves, extract.is_high_ticket)
+            added = db.backfill_cve_mentions(conn, extract.extract_cves)
             print(f"CVE mentions backfilled:  {added['mentions_added']} across "
-                  f"{added['articles_changed']} article(s), {added['distinct_cves']} CVE(s), "
-                  f"{added['promoted_high_ticket']} promoted to high ticket")
+                  f"{added['articles_changed']} article(s), {added['distinct_cves']} CVE(s)")
             stats = db.backfill_exploited_in_wild(conn, extract.exploitation_evidence)
             print(f"In-the-wild reporting:    {stats['cve_reports']} claim(s) across "
                   f"{stats['distinct_cves']} CVE(s), {stats['articles_changed']} article flag(s) changed")
@@ -144,7 +143,11 @@ def cmd_enrich(args: argparse.Namespace) -> None:
             do_epss=not args.no_epss,
             do_kev=not args.no_kev,
             records_limit=args.records,
+            do_coverage=not args.no_coverage,
         )
+        if not args.no_coverage:
+            print(f"Coverage listings:        refreshed {', '.join(summary['coverage_refreshed']) or 'none (fresh)'}"
+                  + (f", FAILED {', '.join(summary['coverage_failed'])}" if summary["coverage_failed"] else ""))
         if args.records:
             print(f"CVE records read:         {summary['records_checked']}, "
                   f"{summary['records_scored']} with a score, {summary['records_failed']} failed")
@@ -154,7 +157,8 @@ def cmd_enrich(args: argparse.Namespace) -> None:
         print(f"NVD lookups:              {summary['nvd_checked']} checked, "
               f"{summary['nvd_scored']} with a score, {summary['nvd_failed']} failed"
               f"{'' if summary['nvd_key'] else '  (no API key: 5 requests/30s)'}")
-        print(f"Promoted to high ticket:  {summary['promoted_high_ticket']}")
+        print(f"Priority recomputed:      {summary['articles_scored']} articles, "
+              f"{summary['high_ticket_now']} now high ticket (band HIGH or above)")
     finally:
         conn.close()
 
@@ -262,6 +266,8 @@ def main() -> int:
     p_enrich.add_argument("--records", type=int, default=300,
                            help="max CVE records to read this run (default: 300; 0 skips them). "
                                 "A first backfill of every captured CVE needs one large run")
+    p_enrich.add_argument("--no-coverage", action="store_true",
+                           help="skip the Nuclei, Metasploit and Sigma listings (re-read at most daily anyway)")
     p_enrich.add_argument("--no-nvd", action="store_true", help="skip the NVD severity lookups")
     p_enrich.add_argument("--no-epss", action="store_true", help="skip the EPSS refresh")
     p_enrich.add_argument("--no-kev", action="store_true", help="skip the CISA KEV catalog check")

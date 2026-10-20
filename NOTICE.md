@@ -44,6 +44,14 @@ your own local database. So are CVE Records from the CVE Program's
 [nomi-sec/PoC-in-GitHub](https://github.com/nomi-sec/PoC-in-GitHub). None of that content is
 stored in or distributed with this repository. Each source's own terms apply to what you fetch.
 
+For exploit and detection coverage, NekoCTI reads the file listings of
+[projectdiscovery/nuclei-templates](https://github.com/projectdiscovery/nuclei-templates) (MIT)
+and [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) (Detection Rule License 1.1), and
+Metasploit's module index from
+[rapid7/metasploit-framework](https://github.com/rapid7/metasploit-framework) (BSD-3-Clause). It
+stores only which CVEs they cover and links back to each template, rule or module, never their
+content. The exploit maturity ladder follows [CVSS-BT](https://github.com/t0sche/cvss-bt).
+
 ## Python dependencies
 
 Installed by `uv` from `uv.lock`, not stored in this repository. Each is under its own licence
