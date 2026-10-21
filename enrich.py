@@ -201,10 +201,13 @@ def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
     if records_limit is None:
         records_limit = cverecord.POST_INGEST_LIMIT
     api_key = nvd_api_key()
+    # A step that didn't run has no counts, only its name in "skipped", so
+    # nothing downstream can read "turned off" as "ran and found nothing".
     summary = {
         "source": "CVE enrichment (CVE record + NVD + EPSS + KEV)",
-        "epss_updated": 0, "kev_listed": 0, "nvd_checked": 0, "nvd_scored": 0,
-        "nvd_failed": 0, "nvd_key": bool(api_key),
+        "nvd_key": bool(api_key),
+        "skipped": [step for step, on in (("records", records_limit), ("coverage", do_coverage),
+                                          ("epss", do_epss), ("kev", do_kev), ("nvd", do_nvd)) if not on],
     }
 
     # First: the record is fast and usually has the score NVD hasn't got to.
@@ -229,6 +232,7 @@ def enrich(conn, nvd_limit: int = NVD_DEFAULT_LIMIT, do_nvd: bool = True,
             summary["kev_failed"] = True
 
     if do_nvd:
+        summary.update(nvd_checked=0, nvd_scored=0, nvd_failed=0)
         delay = NVD_DELAY_WITH_KEY_S if api_key else NVD_DELAY_NO_KEY_S
         for cve_id in db.cves_needing_nvd(conn, NVD_RECHECK_DAYS, nvd_limit):
             record, answered = fetch_nvd(cve_id, api_key)

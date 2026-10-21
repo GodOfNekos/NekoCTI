@@ -5,7 +5,8 @@
 .env
 
 # Data -- generated/mounted at runtime, not source. The real deployment
-# mounts ./data as the persistent volume (see docker-compose.yml) instead.
+# keeps it in a volume (see docker-compose.yml), or ./data when an override
+# maps that instead.
 data/
 *.db
 *.sqlite3

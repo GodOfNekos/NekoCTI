@@ -76,21 +76,39 @@ def _load(path: Path, key: str, default):
     return json.loads(text).get(key, default)
 
 
-def load_filters() -> tuple[dict[str, list[str]], list[dict], list[dict]]:
+def load_filters() -> tuple[dict[str, list[str | dict]], list[dict], list[dict]]:
     """(watchlist vendors, tracked entities, tracked campaigns)."""
     return (_load(WATCHLIST_PATH, "vendors", {}), _load(TAGS_PATH, "entities", []),
             _load(CAMPAIGNS_PATH, "campaigns", []))
 
 
-def match_vendors(text: str, watchlist: dict[str, list[str]]) -> list[tuple[str, str]]:
+def term_and_exclusions(entry: str | dict) -> tuple[str, list[str]]:
+    """A watchlist entry is a term, or {"term": ..., "exclude": [...]}."""
+    if isinstance(entry, str):
+        return entry, []
+    return entry["term"], entry.get("exclude", [])
+
+
+def _whole(phrase: str) -> str:
+    return r"\b" + re.escape(phrase.lower()) + r"\b"
+
+
+def match_vendors(text: str, watchlist: dict[str, list[str | dict]]) -> list[tuple[str, str]]:
     """Case-insensitive whole-term matching against the vendor watchlist.
-    Returns every matching (category, term) pair; it tags, never discards."""
+    Returns every matching (category, term) pair; it tags, never discards.
+
+    A term's excluded phrases are blanked out of the text before that term is
+    looked for, so with "PHP Jabbers" excluded, "PHP Jabbers Booking Calendar"
+    isn't PHP, but a text naming both it and PHP itself still is."""
     lowered = text.lower()
     matches: list[tuple[str, str]] = []
-    for category, terms in watchlist.items():
-        for term in terms:
-            pattern = r"\b" + re.escape(term.lower()) + r"\b"
-            if re.search(pattern, lowered):
+    for category, entries in watchlist.items():
+        for entry in entries:
+            term, exclude = term_and_exclusions(entry)
+            haystack = lowered
+            for phrase in exclude:
+                haystack = re.sub(_whole(phrase), " ", haystack)
+            if re.search(_whole(term), haystack):
                 matches.append((category, term))
     return matches
 

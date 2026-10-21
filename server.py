@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -446,14 +447,23 @@ def read_config(url_path: str) -> dict:
 
 def valid_config(url_path: str, data) -> bool:
     """The shape extract.py relies on; anything else would break every later
-    ingest. Watchlist: {"vendors": {category: [term, ...]}}. Tags and
-    campaigns: {key: [{"name": str, "aliases": [str, ...]}, ...]}."""
+    ingest. Watchlist: {"vendors": {category: [entry, ...]}}, an entry being a
+    term or {"term": str, "exclude": [str, ...]}. Tags and campaigns:
+    {key: [{"name": str, "aliases": [str, ...]}, ...]}."""
     _, key = _CONFIGS[url_path]
     if not isinstance(data, dict) or set(data) != {key}:
         return False
     strs = lambda xs: isinstance(xs, list) and all(isinstance(x, str) for x in xs)
     if key == "vendors":
-        return isinstance(data[key], dict) and all(isinstance(k, str) and strs(v) for k, v in data[key].items())
+        def entry_ok(e) -> bool:
+            if isinstance(e, str):
+                return True
+            return (isinstance(e, dict) and set(e) <= {"term", "exclude"}
+                    and isinstance(e.get("term"), str) and bool(e["term"].strip())
+                    and strs(e.get("exclude", [])) and all(x.strip() for x in e.get("exclude", [])))
+        return isinstance(data[key], dict) and all(
+            isinstance(k, str) and isinstance(v, list) and all(entry_ok(e) for e in v)
+            for k, v in data[key].items())
     return isinstance(data[key], list) and all(
         isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"].strip()
         and strs(e.get("aliases", [])) and set(e) <= {"name", "aliases"}
@@ -556,6 +566,7 @@ _STATIC_FILES = {
 # Everything else needs a login session (auth.py).
 PUBLIC_PATHS = {"/login", "/login.js", "/style.css", "/fonts/ShareTechMono-Regular.ttf"}
 SESSION_COOKIE = "nekocti_session"
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]*")   # secrets.token_urlsafe's alphabet
 MAX_LOGIN_BYTES = 1024
 
 # On every response. Feed text is untrusted, so the page may only run its own
@@ -633,6 +644,11 @@ class Handler(BaseHTTPRequestHandler):
     def _cookie(token: str, max_age: int) -> str:
         # HttpOnly: no script can read it. SameSite=Strict: no other site's
         # request carries it. Secure: HTTPS only (localhost counts in Dev).
+        # Only a token_urlsafe value (or "" to log out) may reach the header:
+        # a line break would split the response, and ; or = would set
+        # attributes. Refused, not stripped, so a bug fails loudly.
+        if not _TOKEN_RE.fullmatch(token) or not isinstance(max_age, int):
+            raise ValueError("not a session token")
         return f"{SESSION_COOKIE}={token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age={max_age}"
 
     def _login(self) -> None:

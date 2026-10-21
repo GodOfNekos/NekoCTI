@@ -50,9 +50,14 @@ Dependencies: `feedparser`, `httpx`, `trafilatura` and `mitreattack-python`.
 
 ### Docker (how it's meant to run)
 
-1. Optional: copy `.env.example` to `.env`. `NVD_API_KEY` makes NVD lookups ten times faster, and
-   `DIGEST_NOTES_DIR` points the digest at the folder holding your daily notes (`YYYY-MM-DD.md`
-   files); otherwise it goes to `./digest-notes`.
+1. Optional: copy `.env.example` to `.env`.
+   - `NVD_API_KEY` makes NVD lookups ten times faster, and `GITHUB_TOKEN` raises the GitHub API
+     limit (advisories, PoC and coverage listings) from 60 requests an hour to 5,000.
+   - `DIGEST_NOTES_DIR` points the digest at the folder holding your daily notes; otherwise it
+     goes to `./digest-notes`. Notes are `YYYY-MM-DD.md` there, or set `DIGEST_NOTE_PATTERN` for
+     month folders or any other layout.
+   - `NEKOCTI_NAME` and `NEKOCTI_PORT` let a second instance, in its own folder, run beside the
+     first.
 2. `docker compose up -d --build`
 3. Set the dashboard password: `docker compose exec nekocti /app/.venv/bin/python main.py set-password`
 4. Open `http://127.0.0.1:8778/` on the same machine.
@@ -84,16 +89,26 @@ uv run python main.py classify           # ATT&CK classification with the local 
 uv run python main.py enrich             # CVE severity and exploitation facts (--limit, --records, --no-nvd)
 uv run python main.py enrich --records 8000 --no-nvd  # first run: read the CVE Record for every captured CVE
 uv run python main.py digest --no-write  # print the digest (without --no-write it appends to today's note)
+uv run python main.py retag --dry-run    # what re-matching stored articles to the current filters would change
+uv run python main.py retag              # do it, after editing the watchlist, entities or campaigns
 ```
+
+A source that can't be read (an HTTP error, or nothing parseable) is reported as failed, by
+`ingest` and on the dashboard's RUN CHECK NOW, not counted as an empty feed.
 
 There's no scheduler on purpose: a check runs when you press the button or call `ingest`.
 
 ## Configuration
 
 - `watchlist.json`: vendors and products you care about. Matching tags items, never hides others.
+  Terms match as whole words in any case. A term that catches unrelated products can carry
+  exclusions: `{"term": "PHP", "exclude": ["PHP Jabbers"]}` stops "PHP Jabbers Booking Calendar"
+  counting as PHP, while a text that also names PHP itself still does.
 - `tags.json` and `campaigns.json`: named threat actors and campaigns to track, with aliases.
 
-All three are editable from the dashboard and live in `data/` under Docker.
+All three are editable from the dashboard. Under Docker they live with the database in the
+`nekocti-data` volume (see `docker-compose.yml` for keeping them in a folder instead). Terms match an article's
+title and text. A change applies to new articles straight away; `retag` applies it to the archive.
 
 ## Security
 

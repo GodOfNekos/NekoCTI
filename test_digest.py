@@ -1,13 +1,17 @@
 # Copyright (C) 2026 Cameron Gates (GodOfNekos)
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Tests for digest.py's per-article line. Stdlib only, in-memory SQLite, and
-nothing is written to the vault.
+"""Tests for digest.py's per-article line and where it writes. Stdlib only,
+in-memory SQLite and temporary folders; nothing is written to the vault.
 
     .venv\\Scripts\\python.exe -m unittest -v test_digest
 """
 import re
 import sqlite3
+import tempfile
 import unittest
+from datetime import datetime
+from pathlib import Path
+from unittest import mock
 
 import digest
 
@@ -62,6 +66,37 @@ class UntrustedTitles(unittest.TestCase):
         self.assertEqual(_line("Plain", "javascript:alert(1)"), "- Plain")
         self.assertEqual(_line("Plain", ""), "- Plain")
         self.assertEqual(_line("P", "https://x.test/a b(c)"), "- [P](https://x.test/a%20b%28c%29)")
+
+
+class NotePath(unittest.TestCase):
+    """Where the digest goes: flat by default, or any strftime layout."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name) / "notes"     # its parent is still ours, for the escape test
+        self.dir.mkdir()
+        p = mock.patch.object(digest, "VAULT_DAILY_NOTES", self.dir)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def write(self, pattern):
+        with mock.patch.object(digest, "NOTE_PATTERN", pattern):
+            return digest.write_to_daily_note("digest body")
+
+    def test_a_month_folder_layout_finds_the_note(self):
+        note = self.dir / datetime.now().strftime("%m - %B %Y") / datetime.now().strftime("%Y-%m-%d.md")
+        note.parent.mkdir()
+        note.write_text("# today\n", encoding="utf-8")
+        self.assertFalse(self.write("%Y-%m-%d.md"))              # flat: no note there, nothing written
+        self.assertTrue(self.write("%m - %B %Y/%Y-%m-%d.md"))
+        self.assertIn("digest body", note.read_text(encoding="utf-8"))
+
+    def test_a_pattern_cannot_reach_outside_the_notes_folder(self):
+        outside = self.dir.parent / datetime.now().strftime("%Y-%m-%d.md")
+        outside.write_text("# not a daily note\n", encoding="utf-8")
+        self.assertFalse(self.write("../%Y-%m-%d.md"))
+        self.assertNotIn("digest body", outside.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

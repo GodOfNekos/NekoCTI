@@ -48,6 +48,19 @@ function errorHTML(err) {
   return `<div class="empty-state error-state">SIGNAL LOST - COULD NOT REACH NEKOCTI BACKEND.<br>${esc(err.message || err)}</div>`;
 }
 
+// Each load takes a ticket and draws only if it's still the newest, so a
+// slow response can't replace whatever was opened while it was on its way.
+// One counter for the content area, one for the reader overlay.
+function latestOnly() {
+  let newest = 0;
+  return () => {
+    const mine = ++newest;
+    return () => mine === newest;
+  };
+}
+const viewLoad = latestOnly();
+const readerLoad = latestOnly();
+
 // Show one content region and hide the others and the reader.
 const VIEWS = ["list", "manage-panel", "attack-view", "pocs-view"];
 function showView(id) {
@@ -177,18 +190,21 @@ function renderList(articles) {
 }
 
 async function loadArticles() {
+  const current = viewLoad();
   try {
     const data = await fetchJSON(`/api/articles?tab=${encodeURIComponent(state.tab)}&range=${encodeURIComponent(state.range)}`);
+    if (!current()) return;
     renderList(data.articles);
     updateCounts(data.counts);
   } catch (err) {
-    showView("list").innerHTML = errorHTML(err);
+    if (current()) showView("list").innerHTML = errorHTML(err);
   }
 }
 
 // --- Search: FTS5 across the whole archive, ranked by relevance ---
 
 async function renderSearchResults(query) {
+  const current = viewLoad();
   const list = showView("list");
   list.innerHTML = `<div class="section-label">// SEARCHING...</div>`;
 
@@ -196,9 +212,10 @@ async function renderSearchResults(query) {
   try {
     data = await fetchJSON(`/api/search?q=${encodeURIComponent(query)}`);
   } catch (err) {
-    list.innerHTML = errorHTML(err);
+    if (current()) list.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
 
   const label = `// SEARCH RESULTS FOR "${esc(query)}"`;
   if (!data.articles.length) {
@@ -224,6 +241,7 @@ function updateCounts(counts) {
 // --- Reader: the captured article, read in the dashboard ---
 
 async function openReader(id) {
+  const current = readerLoad();
   const overlay = document.getElementById("reader-overlay");
   overlay.hidden = false;
   overlay.innerHTML = `<div class="reader-body">LOADING...</div>`;
@@ -232,9 +250,10 @@ async function openReader(id) {
   try {
     article = await fetchJSON(`/api/article/${encodeURIComponent(id)}`);
   } catch (err) {
-    overlay.innerHTML = `<div class="reader-body">${errorHTML(err)}</div>`;
+    if (current()) overlay.innerHTML = `<div class="reader-body">${errorHTML(err)}</div>`;
     return;
   }
+  if (!current()) return;
 
   const metaParts = [];
   if (article.published_at) metaParts.push(article.published_at);
@@ -413,6 +432,7 @@ function renderArticleBody(text) {
 let attackMatrixCache = null;
 
 async function renderAttackMatrix() {
+  const current = viewLoad();
   const view = showView("attack-view");
 
   if (!attackMatrixCache) {
@@ -420,9 +440,10 @@ async function renderAttackMatrix() {
     try {
       attackMatrixCache = await fetchJSON("/api/attack/matrix");
     } catch (err) {
-      view.innerHTML = errorHTML(err);
+      if (current()) view.innerHTML = errorHTML(err);
       return;
     }
+    if (!current()) return;
   }
 
   const { tactics, techniques } = attackMatrixCache;
@@ -465,14 +486,16 @@ async function renderAttackMatrix() {
 }
 
 async function openAttackTechnique(techniqueId) {
+  const current = viewLoad();
   const view = document.getElementById("attack-view");
   let data;
   try {
     data = await fetchJSON(`/api/attack/technique/${encodeURIComponent(techniqueId)}`);
   } catch (err) {
-    view.innerHTML = errorHTML(err);
+    if (current()) view.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
 
   view.innerHTML = `
     ${readerHeader(`${data.technique_id}: ${data.technique_name}`, "attack-back-btn", "BACK TO MATRIX")}
@@ -487,6 +510,7 @@ async function openAttackTechnique(techniqueId) {
 // --- Public PoC availability (nomi-sec/PoC-in-GitHub), read fresh each time ---
 
 async function renderPocsOverview() {
+  const current = viewLoad();
   const view = showView("pocs-view");
   view.innerHTML = `<div class="attack-search"><input disabled placeholder="LOADING REAL POC DATA..."></div>`;
 
@@ -494,9 +518,10 @@ async function renderPocsOverview() {
   try {
     data = await fetchJSON("/api/pocs");
   } catch (err) {
-    view.innerHTML = errorHTML(err);
+    if (current()) view.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
 
   const cves = data.cves || [];
   const countEl = document.getElementById("count-pocs");
@@ -546,14 +571,16 @@ async function renderPocsOverview() {
 }
 
 async function openPocDetail(cveId) {
+  const current = viewLoad();
   const view = document.getElementById("pocs-view");
   let data;
   try {
     data = await fetchJSON(`/api/poc/${encodeURIComponent(cveId)}`);
   } catch (err) {
-    view.innerHTML = errorHTML(err);
+    if (current()) view.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
 
   const pocRows = data.pocs.map((p) => {
     const url = safeUrl(p.repo_url);
@@ -609,28 +636,36 @@ async function openPocDetail(cveId) {
 // --- Watchlist management ---
 
 async function renderWatchlistPanel() {
+  const current = viewLoad();
   const panel = showView("manage-panel");
 
   let data;
   try {
     data = await fetchJSON("/api/watchlist");
   } catch (err) {
-    panel.innerHTML = errorHTML(err);
+    if (current()) panel.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
   const vendors = data.vendors || {};
+  // An entry is a term, or {term, exclude: [phrases that don't count as it]}.
+  const termOf = (entry) => (typeof entry === "string" ? entry : entry.term);
+  const excludesOf = (entry) => (typeof entry === "string" ? [] : entry.exclude || []);
 
-  panel.innerHTML = Object.entries(vendors).map(([category, terms]) => `
+  panel.innerHTML = Object.entries(vendors).map(([category, entries]) => `
     <div class="category" data-category="${esc(category)}">
       <div class="category-label">// ${esc(category.toUpperCase().replace(/_/g, " "))}</div>
       <div class="term-list">
-        ${terms.map((t) => `<span class="term" data-term="${esc(t)}">${esc(t)}<span class="remove">x</span></span>`).join("")}
+        ${entries.map((entry, i) => `<span class="term" data-index="${i}">${esc(termOf(entry))}${
+          excludesOf(entry).length ? `<span class="term-exclude">NOT ${excludesOf(entry).map(esc).join(", ")}</span>` : ""
+        }<span class="remove">x</span></span>`).join("")}
       </div>
     </div>
   `).join("") + `
     <div class="add-row">
       <input id="new-category" placeholder="category (e.g. cloud_identity)">
       <input id="new-term" placeholder="vendor/product term">
+      <input id="new-exclude" placeholder="exclude (a, b, ...)">
       <button id="add-term-btn">ADD</button>
     </div>
   `;
@@ -640,18 +675,27 @@ async function renderWatchlistPanel() {
       e.stopPropagation();
       const termEl = el.closest(".term");
       const category = termEl.closest(".category").dataset.category;
-      vendors[category] = vendors[category].filter((t) => t !== termEl.dataset.term);
+      vendors[category].splice(Number(termEl.dataset.index), 1);
       await writeJSON("/api/watchlist", "PUT", { vendors });
       renderWatchlistPanel();
     });
   });
 
+  // A term already in the category gains the new exclusions instead of a duplicate.
   document.getElementById("add-term-btn").addEventListener("click", async () => {
     const category = document.getElementById("new-category").value.trim();
     const term = document.getElementById("new-term").value.trim();
+    const exclude = document.getElementById("new-exclude").value.split(",").map((x) => x.trim()).filter(Boolean);
     if (!category || !term) return;
-    vendors[category] = vendors[category] || [];
-    vendors[category].push(term);
+    const entries = (vendors[category] = vendors[category] || []);
+    const i = entries.findIndex((entry) => termOf(entry).toLowerCase() === term.toLowerCase());
+    if (i === -1) {
+      entries.push(exclude.length ? { term, exclude } : term);
+    } else if (exclude.length) {
+      entries[i] = { term: termOf(entries[i]), exclude: [...new Set([...excludesOf(entries[i]), ...exclude])] };
+    } else {
+      return;
+    }
     await writeJSON("/api/watchlist", "PUT", { vendors });
     renderWatchlistPanel();
   });
@@ -674,6 +718,7 @@ const TRACKED = {
 };
 
 async function renderTrackedPanel(kind) {
+  const current = viewLoad();
   const cfg = TRACKED[kind];
   const panel = showView("manage-panel");
 
@@ -681,9 +726,10 @@ async function renderTrackedPanel(kind) {
   try {
     data = await fetchJSON(cfg.api);
   } catch (err) {
-    panel.innerHTML = errorHTML(err);
+    if (current()) panel.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
   const items = data[cfg.key] || [];
   const save = async () => {
     await writeJSON(cfg.api, "PUT", { [cfg.key]: items });
@@ -728,6 +774,7 @@ async function renderTrackedPanel(kind) {
 }
 
 async function openTrackedArticles(kind, name) {
+  const current = viewLoad();
   const cfg = TRACKED[kind];
   const list = showView("list");
   list.innerHTML = `<div class="section-label">// LOADING...</div>`;
@@ -736,9 +783,10 @@ async function openTrackedArticles(kind, name) {
   try {
     data = await fetchJSON(`${cfg.articles}${encodeURIComponent(name)}`);
   } catch (err) {
-    list.innerHTML = errorHTML(err);
+    if (current()) list.innerHTML = errorHTML(err);
     return;
   }
+  if (!current()) return;
 
   list.innerHTML = `
     ${readerHeader(data[cfg.nameKey], "tracked-back-btn", cfg.back)}
@@ -956,11 +1004,14 @@ async function pollIngestStatus() {
     const totalNew = status.results
       .filter((r) => r.kind !== "enrichment")
       .reduce((sum, r) => sum + (r.new || 0), 0);
+    // A source that couldn't be read is a failure, not an empty feed.
+    const failed = status.results.filter((r) => r.error).length;
     const e = status.enrich;
     const extra = status.enrich_error
       ? ", REFRESH FAILED"
       : e ? `, ${(e.nvd_scored || 0) + (e.records_scored || 0)} SEVERITY, ${e.epss_updated || 0} EPSS` : "";
-    setRunCheckIdle(`DONE (+${totalNew} NEW${extra})`);
+    // Failures straight after NEW: the phone footer cuts the chip at about 24 characters.
+    setRunCheckIdle(`DONE (+${totalNew} NEW${failed ? `, ${failed} FAILED` : ""}${extra})`);
     refresh();
   } else {
     setRunCheckIdle("RUN CHECK NOW");

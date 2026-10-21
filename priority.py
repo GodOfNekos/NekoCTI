@@ -153,7 +153,7 @@ def score_article(cve_scores: list[tuple[int, str, list[str], str]], *, n_cves: 
     return _score(band, rules), BANDS[band], [text for _, text in sorted(rules, key=lambda r: -r[0])]
 
 
-def gather_cve_facts(conn, watchlist: dict[str, list[str]]) -> dict[str, dict]:
+def gather_cve_facts(conn, watchlist: dict[str, list[str | dict]]) -> dict[str, dict]:
     """Every captured CVE's facts, in a handful of bulk queries."""
     now = datetime.now(timezone.utc)
     facts: dict[str, dict] = {cve: {} for cve in db.all_cve_ids(conn)}

@@ -252,8 +252,14 @@ _MIGRATIONS = [
 ]
 
 
+# How long a write waits for another connection's lock before failing. The
+# dashboard, a check and a CLI command can all hold one; sqlite3's default 5s
+# turned an overlap into "database is locked".
+LOCK_TIMEOUT_S = 30
+
+
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=LOCK_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -409,6 +415,67 @@ def backfill_cve_mentions(conn: sqlite3.Connection, extract_fn) -> dict:
         stats["cves"].update(cve_id for cve_id, _ in new)
     conn.commit()
     stats["distinct_cves"] = len(stats.pop("cves"))
+    return stats
+
+
+# The match tables backfill_filter_matches rewrites: kind -> (table, columns).
+_MATCH_TABLES = {
+    "vendor": ("vendor_matches", ("category", "vendor_term")),
+    "entity": ("entity_matches", ("entity_name",)),
+    "campaign": ("campaign_matches", ("campaign_name",)),
+}
+
+
+def backfill_filter_matches(conn: sqlite3.Connection, match_fn, write: bool = True) -> dict:
+    """Re-match every stored article against the current watchlist, tracked
+    entities and campaigns, without re-fetching anything, so an edited term,
+    alias or exclusion applies to the archive as well as to new articles.
+    match_fn(text) -> (vendor (category, term) pairs, entity names, campaign
+    names). With write=False it only counts what would change.
+
+    The text is what every ingester matches: the title and the stored body.
+    ponytail: KEV and GHSA also matched fields they never stored (KEV's
+    vendor and product, GHSA's package names), so a match that came only from
+    one of those drops out here. Per-source counts show it, and a dry run
+    shows it first; store the fields if that ever matters."""
+    current: dict[str, dict[int, set]] = {kind: {} for kind in _MATCH_TABLES}
+    for kind, (table, cols) in _MATCH_TABLES.items():
+        for row in conn.execute(f"SELECT article_id, {', '.join(cols)} FROM {table}"):
+            value = tuple(row[1:]) if len(cols) > 1 else row[1]
+            current[kind].setdefault(row[0], set()).add(value)
+
+    rows = conn.execute(
+        "SELECT a.id, a.title, a.description, a.full_text, s.name AS source "
+        "FROM articles a JOIN sources s ON s.id = a.source_id"
+    ).fetchall()
+    stats = {"articles": len(rows), "articles_changed": 0, "by_source": {},
+             "added": dict.fromkeys(_MATCH_TABLES, 0), "removed": dict.fromkeys(_MATCH_TABLES, 0)}
+    for row in rows:
+        text = f"{row['title'] or ''} {row['full_text'] or row['description'] or ''}"
+        vendors, entities, campaigns = match_fn(text)
+        fresh = {"vendor": set(vendors), "entity": set(entities), "campaign": set(campaigns)}
+        changed = False
+        for kind, (table, cols) in _MATCH_TABLES.items():
+            old = current[kind].get(row["id"], set())
+            added, removed = fresh[kind] - old, old - fresh[kind]
+            if not (added or removed):
+                continue
+            changed = True
+            stats["added"][kind] += len(added)
+            stats["removed"][kind] += len(removed)
+            per_source = stats["by_source"].setdefault(row["source"], {"added": 0, "removed": 0})
+            per_source["added"] += len(added)
+            per_source["removed"] += len(removed)
+            if write:
+                conn.execute(f"DELETE FROM {table} WHERE article_id = ?", (row["id"],))
+                conn.executemany(
+                    f"INSERT INTO {table} (article_id, {', '.join(cols)}) "
+                    f"VALUES (?, {', '.join('?' for _ in cols)})",
+                    [(row["id"], *(v if isinstance(v, tuple) else (v,))) for v in sorted(fresh[kind])],
+                )
+        stats["articles_changed"] += changed
+    if write:
+        conn.commit()
     return stats
 
 
@@ -645,14 +712,17 @@ def record_kev_membership(conn: sqlite3.Connection, kev: dict[str, dict]) -> int
     return marked
 
 
-def cves_needing_record(conn: sqlite3.Connection, recheck_after_days: int,
+def cves_needing_record(conn: sqlite3.Connection, recheck_after_days: int, missing_after_hours: int,
                         young_days: int, limit: int) -> list[str]:
     """CVEs to read the CVE record for next: never read first, newest
     identifier first. A record is read again only while it's young and still
     missing a score or SSVC, because CNAs and CISA add those days after
-    publication; a rejected record is final."""
+    publication; a rejected record is final. A missing record (a reserved ID,
+    usually published within days) is read again after hours, not days: its
+    CVE can be news already, and has no score anywhere until it appears."""
     now = datetime.now(timezone.utc)
     recheck = (now - timedelta(days=recheck_after_days)).isoformat()
+    missing_recheck = (now - timedelta(hours=missing_after_hours)).isoformat()
     young = (now - timedelta(days=young_days)).isoformat()
     rows = conn.execute(
         """
@@ -660,6 +730,7 @@ def cves_needing_record(conn: sqlite3.Connection, recheck_after_days: int,
         FROM cve_mentions cm
         LEFT JOIN cve_scores cs ON cs.cve_id = cm.cve_id
         WHERE cs.rec_checked_at IS NULL
+           OR (cs.rec_state = 'MISSING' AND cs.rec_checked_at < ?)
            OR (cs.rec_checked_at < ?
                AND COALESCE(cs.rec_state, '') != 'REJECTED'
                AND (cs.rec_base_score IS NULL OR cs.ssvc_exploitation IS NULL)
@@ -667,7 +738,7 @@ def cves_needing_record(conn: sqlite3.Connection, recheck_after_days: int,
         ORDER BY never DESC, cm.cve_id DESC
         LIMIT ?
         """,
-        (recheck, now.isoformat(), young, limit),
+        (missing_recheck, recheck, now.isoformat(), young, limit),
     ).fetchall()
     return [r["cve_id"] for r in rows]
 

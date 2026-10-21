@@ -10,6 +10,7 @@ a roundup article. Nothing touches the real database or the network.
 import tempfile
 import unittest
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -114,6 +115,15 @@ class WithDatabase(unittest.TestCase):
                                  "CVE-2026-1001": ["Microsoft"]})  # no record: a small article's title counts,
         # neither a roundup nor a weekly report's body ties 1002 to anything
 
+    def test_a_watchlist_exclusion_applies_to_the_records_affected_list(self):
+        self.article(["CVE-2026-4001"])
+        rec = {"cveMetadata": {"state": "PUBLISHED"},
+               "containers": {"cna": {"affected": [{"vendor": "PHP Jabbers", "product": "Booking Calendar"}]}}}
+        db.record_cve_record(self.conn, "CVE-2026-4001", cverecord.parse_record(rec))
+        plain, excluding = {"web": ["PHP"]}, {"web": [{"term": "PHP", "exclude": ["PHP Jabbers"]}]}
+        self.assertEqual(cverecord.watchlist_terms(self.conn, ["CVE-2026-4001"], plain), {"CVE-2026-4001": ["PHP"]})
+        self.assertEqual(cverecord.watchlist_terms(self.conn, ["CVE-2026-4001"], excluding), {})
+
     def test_refresh_records_answers_skips_failures_and_never_rereads_rejected(self):
         self.article(["CVE-2026-2001", "CVE-2026-2002", "CVE-2026-2003"])
         answers = {"CVE-2026-2001": (REAL, True), "CVE-2026-2002": (None, True), "CVE-2026-2003": (None, False)}
@@ -125,7 +135,16 @@ class WithDatabase(unittest.TestCase):
         self.assertNotIn("CVE-2026-2003", rows)                  # a failed lookup isn't an answer
         self.conn.execute("UPDATE cve_scores SET rec_checked_at = '2000-01-01', rec_state = 'REJECTED', "
                           "rec_base_score = NULL WHERE cve_id = 'CVE-2026-2001'")
-        self.assertNotIn("CVE-2026-2001", db.cves_needing_record(self.conn, 7, 90, 10))
+        self.assertNotIn("CVE-2026-2001", db.cves_needing_record(self.conn, 7, 20, 90, 10))
+
+    def test_a_missing_record_is_read_again_within_a_day_not_a_week(self):
+        self.article(["CVE-2026-3001", "CVE-2026-3002"])
+        db.record_cve_record(self.conn, "CVE-2026-3001", None)              # reserved: no record yet
+        db.record_cve_record(self.conn, "CVE-2026-3002", cverecord.parse_record(REAL))
+        self.assertEqual(db.cves_needing_record(self.conn, 7, 20, 90, 10), [])    # both just read
+        a_day_ago = (datetime.now(timezone.utc) - timedelta(hours=21)).isoformat()
+        self.conn.execute("UPDATE cve_scores SET rec_checked_at = ?", (a_day_ago,))
+        self.assertEqual(db.cves_needing_record(self.conn, 7, 20, 90, 10), ["CVE-2026-3001"])
 
 
 if __name__ == "__main__":

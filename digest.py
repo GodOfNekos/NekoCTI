@@ -25,8 +25,17 @@ VAULT_DAILY_NOTES = Path(os.environ.get(
 RECENT_ROW_LIMIT = 500
 
 
-def _today_note_path() -> Path:
-    return VAULT_DAILY_NOTES / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+# Today's note under that folder, as a strftime pattern: flat by default, or
+# for example "%m - %B %Y/%Y-%m-%d.md" for month folders
+# ("10 - October 2026/2026-10-21.md").
+NOTE_PATTERN = os.environ.get("DIGEST_NOTE_PATTERN") or "%Y-%m-%d.md"
+
+
+def _today_note_path() -> Path | None:
+    """None if the pattern points outside the notes folder: the container
+    mounts only that folder, and outside it is never the digest's to write."""
+    path = (VAULT_DAILY_NOTES / datetime.now().strftime(NOTE_PATTERN)).resolve()
+    return path if VAULT_DAILY_NOTES.resolve() in path.parents else None
 
 
 MAX_VENDORS_SHOWN = 3
@@ -144,7 +153,7 @@ def write_to_daily_note(digest_text: str) -> bool:
     """Append the digest to today's daily note. Never creates the note (the
     vault has its own conventions for that); False if it doesn't exist."""
     path = _today_note_path()
-    if not path.exists():
+    if path is None or not path.exists():
         return False
 
     timestamp = datetime.now().strftime("%I:%M %p").lstrip("0")

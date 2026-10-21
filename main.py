@@ -11,6 +11,8 @@
     uv run python main.py enrich             # NVD severity, EPSS, CISA KEV, and in-the-wild reporting
     uv run python main.py enrich --limit 500 # same, allowing more (rate-limited) NVD lookups this run
     uv run python main.py enrich --records 8000 --no-nvd  # backfill the CVE record for every captured CVE
+    uv run python main.py retag --dry-run    # what re-matching stored articles to the current filters would change
+    uv run python main.py retag              # do it, after editing the watchlist, entities or campaigns
     uv run python main.py set-password       # set or reset the dashboard password (ends every session)
 """
 
@@ -27,6 +29,7 @@ import digest as digest_mod
 import enrich
 import extract
 import ingest
+import priority
 
 # Windows' console is cp1252, which can't print emoji or smart quotes from titles.
 if sys.platform == "win32":
@@ -109,6 +112,15 @@ def cmd_archive(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _count(summary: dict, key: str, step: str):
+    """A step's count from enrich's summary, or why there isn't one."""
+    if step in summary["skipped"]:
+        return "skipped"
+    if step == "kev" and summary.get("kev_failed"):
+        return "fetch failed"
+    return summary[key]
+
+
 def _refresh_after_ingest() -> None:
     """Same freshness pass the dashboard's check button runs, so the CLI and
     the button behave identically. Never allowed to fail the ingest."""
@@ -116,8 +128,8 @@ def _refresh_after_ingest() -> None:
     try:
         s = enrich.refresh_after_ingest(conn)
         print(f"  refreshed: CVE records +{s['records_scored']} scored, EPSS {s['epss_updated']}, "
-              f"KEV-listed {s['kev_listed']}, NVD +{s['nvd_scored']}, new CVE mentions {s['mentions_added']}, "
-              f"exploitation claims {s['exploit_claims']}")
+              f"KEV-listed {_count(s, 'kev_listed', 'kev')}, NVD +{s['nvd_scored']}, "
+              f"new CVE mentions {s['mentions_added']}, exploitation claims {s['exploit_claims']}")
     except Exception as e:
         print(f"  freshness pass failed (articles are still ingested): {e}")
     finally:
@@ -145,20 +157,52 @@ def cmd_enrich(args: argparse.Namespace) -> None:
             records_limit=args.records,
             do_coverage=not args.no_coverage,
         )
-        if not args.no_coverage:
+        skipped = summary["skipped"]
+        if "coverage" in skipped:
+            print("Coverage listings:        skipped")
+        else:
             print(f"Coverage listings:        refreshed {', '.join(summary['coverage_refreshed']) or 'none (fresh)'}"
                   + (f", FAILED {', '.join(summary['coverage_failed'])}" if summary["coverage_failed"] else ""))
-        if args.records:
+        if "records" in skipped:
+            print("CVE records read:         skipped")
+        else:
             print(f"CVE records read:         {summary['records_checked']}, "
                   f"{summary['records_scored']} with a score, {summary['records_failed']} failed")
-        print(f"EPSS scores updated:      {summary['epss_updated']}")
-        print(f"CVEs listed in CISA KEV:  {summary['kev_listed']}"
-              + ("  (catalog fetch failed)" if summary.get("kev_failed") else ""))
-        print(f"NVD lookups:              {summary['nvd_checked']} checked, "
-              f"{summary['nvd_scored']} with a score, {summary['nvd_failed']} failed"
-              f"{'' if summary['nvd_key'] else '  (no API key: 5 requests/30s)'}")
+        print(f"EPSS scores updated:      {_count(summary, 'epss_updated', 'epss')}")
+        print(f"CVEs listed in CISA KEV:  {_count(summary, 'kev_listed', 'kev')}")
+        if "nvd" in skipped:
+            print("NVD lookups:              skipped")
+        else:
+            print(f"NVD lookups:              {summary['nvd_checked']} checked, "
+                  f"{summary['nvd_scored']} with a score, {summary['nvd_failed']} failed"
+                  f"{'' if summary['nvd_key'] else '  (no API key: 5 requests/30s)'}")
         print(f"Priority recomputed:      {summary['articles_scored']} articles, "
               f"{summary['high_ticket_now']} now high ticket (band HIGH or above)")
+    finally:
+        conn.close()
+
+
+def cmd_retag(args: argparse.Namespace) -> None:
+    db.init_db()
+    conn = db.connect()
+    try:
+        watchlist, tags, campaigns = extract.load_filters()
+
+        def match(text: str):
+            return (extract.match_vendors(text, watchlist), extract.match_named(text, tags),
+                    extract.match_named(text, campaigns))
+
+        s = db.backfill_filter_matches(conn, match, write=not args.dry_run)
+        print(f"{'Would change' if args.dry_run else 'Changed'} {s['articles_changed']} "
+              f"of {s['articles']} article(s)")
+        for kind in ("vendor", "entity", "campaign"):
+            print(f"  {kind} matches: +{s['added'][kind]} -{s['removed'][kind]}")
+        for source, n in sorted(s["by_source"].items()):
+            print(f"  {source}: +{n['added']} -{n['removed']}")
+        if not args.dry_run and s["articles_changed"]:
+            # Tracked entities and campaigns feed the priority band.
+            r = priority.recompute(conn)
+            print(f"Priority recomputed: {r['high_ticket_now']} now high ticket")
     finally:
         conn.close()
 
@@ -274,6 +318,11 @@ def main() -> int:
     p_enrich.add_argument("--no-backfill", action="store_true",
                            help="skip re-scanning stored articles for in-the-wild exploitation reporting")
     p_enrich.set_defaults(func=cmd_enrich)
+
+    p_retag = sub.add_parser("retag", help="re-match stored articles against the current watchlist, "
+                                           "entities and campaigns, without re-fetching")
+    p_retag.add_argument("--dry-run", action="store_true", help="count what would change, write nothing")
+    p_retag.set_defaults(func=cmd_retag)
 
     p_password = sub.add_parser("set-password", help="set or reset the dashboard password (ends every session)")
     p_password.set_defaults(func=cmd_set_password)

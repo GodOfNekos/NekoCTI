@@ -195,6 +195,11 @@ class Writes(Served):
         self.assertEqual(self.put("/api/tags", tags), 200)
         self.assertEqual(self.put("/api/campaigns", {"campaigns": [{"name": "Campaign A"}]}), 200)
 
+    def test_a_term_with_exclusions_is_written(self):
+        good = {"vendors": {"web": ["AWS", {"term": "PHP", "exclude": ["PHP Jabbers"]}, {"term": "Okta"}]}}
+        self.assertEqual(self.put("/api/watchlist", good), 200)
+        self.assertEqual(json.loads((self.dir / "watchlist.json").read_text()), good)
+
     def test_writes_without_the_header_are_refused(self):
         self.assertEqual(self.put("/api/watchlist", self.GOOD, header=False), 403)
         self.assertEqual(self.request("/api/ingest/run", "POST", b"")[0], 403)
@@ -203,6 +208,10 @@ class Writes(Served):
     def test_bad_shapes_and_junk_are_refused(self):
         for path, bad in (("/api/watchlist", {"vendors": "x"}), ("/api/watchlist", {"vendors": {"c": [1]}}),
                           ("/api/watchlist", {"vendors": {}, "extra": 1}), ("/api/tags", {"entities": [{"name": ""}]}),
+                          ("/api/watchlist", {"vendors": {"c": [{"term": ""}]}}),
+                          ("/api/watchlist", {"vendors": {"c": [{"term": "PHP", "exclude": "PHP Jabbers"}]}}),
+                          ("/api/watchlist", {"vendors": {"c": [{"term": "PHP", "exclude": [""]}]}}),
+                          ("/api/watchlist", {"vendors": {"c": [{"term": "PHP", "html": "<b>"}]}}),
                           ("/api/tags", {"entities": [{"name": "x", "aliases": "y"}]}),
                           ("/api/campaigns", {"campaigns": [{"name": "x", "html": "<b>"}]}),
                           ("/api/tags", b"not json"), ("/api/tags", [1, 2])):
@@ -212,6 +221,21 @@ class Writes(Served):
     def test_oversized_bodies_are_refused(self):
         huge = {"vendors": {"c": ["x" * (server.MAX_CONFIG_BYTES + 1)]}}
         self.assertEqual(self.put("/api/watchlist", huge), 413)
+
+
+class SessionCookie(unittest.TestCase):
+    """Only a token-shaped value can reach the Set-Cookie header, so nothing
+    can split the response or set cookie attributes (code scanning, October 2026)."""
+
+    def test_a_real_token_and_the_logout_value_are_written(self):
+        token = auth.secrets.token_urlsafe(32)
+        self.assertTrue(server.Handler._cookie(token, 60).startswith(f"{server.SESSION_COOKIE}={token}; HttpOnly"))
+        self.assertIn("Max-Age=0", server.Handler._cookie("", 0))
+
+    def test_anything_else_is_refused(self):
+        for bad in ("abc\r\nSet-Cookie: x=1", "abc; Domain=evil.example", "a=b", "abc def", "abc\n"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.Handler._cookie(bad, 60)
 
 
 class Urls(unittest.TestCase):

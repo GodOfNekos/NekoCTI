@@ -34,6 +34,10 @@ FETCH_WORKERS = 4
 # A record is read again only while young and still missing a score or SSVC.
 RECHECK_DAYS = 7
 YOUNG_DAYS = 90
+# A record that doesn't exist yet is read again after this. A week let two
+# CVEs scoring 9.2 sit unscored after their records appeared (October 2026);
+# 20 hours, like the EPSS and coverage rechecks, so a daily check catches it.
+MISSING_RECHECK_HOURS = 20
 
 # Per check: enough for the CVEs that just arrived. A backfill is an explicit
 # `enrich --records N`.
@@ -135,7 +139,7 @@ def parse_record(rec: dict) -> dict:
 
 def refresh(conn, limit: int = POST_INGEST_LIMIT) -> dict:
     summary = {"records_checked": 0, "records_scored": 0, "records_failed": 0}
-    cve_ids = db.cves_needing_record(conn, RECHECK_DAYS, YOUNG_DAYS, limit)
+    cve_ids = db.cves_needing_record(conn, RECHECK_DAYS, MISSING_RECHECK_HOURS, YOUNG_DAYS, limit)
     with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
         # map() keeps order and hands back each result as it lands.
         for cve_id, (rec, answered) in zip(cve_ids, pool.map(fetch_record, cve_ids)):
@@ -150,7 +154,7 @@ def refresh(conn, limit: int = POST_INGEST_LIMIT) -> dict:
     return summary
 
 
-def watchlist_terms(conn, cve_ids: list[str], watchlist: dict[str, list[str]]) -> dict[str, list[str]]:
+def watchlist_terms(conn, cve_ids: list[str], watchlist: dict[str, list[str | dict]]) -> dict[str, list[str]]:
     """Watchlist terms per CVE, from the record's affected vendors and
     products. A CVE whose record lists none falls back to the titles of
     articles naming 5 or fewer CVEs, never to a roundup or a body's

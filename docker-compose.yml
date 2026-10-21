@@ -8,28 +8,44 @@
 services:
   nekocti:
     build: .
-    container_name: nekocti
+    # A second instance on one machine needs its own name and port (and its
+    # own folder, which gives it its own data): set NEKOCTI_NAME and
+    # NEKOCTI_PORT in that folder's .env.
+    container_name: ${NEKOCTI_NAME:-nekocti}
     restart: unless-stopped
     environment:
       # Optional, from .env (see .env.example): a free NVD API key raises the
       # CVE-severity lookup limit from 5 requests per 30s to 50, the
       # difference between a ~7 hour and a ~90 minute full backfill.
       - NVD_API_KEY=${NVD_API_KEY:-}
+      # Optional, from .env: a GitHub token raises the GitHub API limit (the
+      # advisories and the PoC and coverage listings) from 60 requests an hour
+      # to 5,000. No scopes needed: it only reads public data.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # ATT&CK classification uses Ollama on the Docker host. localhost inside
       # the container would mean the container itself.
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       # Where the digest writes; see the notes mount below.
       - VAULT_DAILY_NOTES_PATH=/app/vault-daily-notes
+      # Today's note inside that folder, as a strftime pattern. Empty means
+      # flat (2026-10-21.md); see .env.example for month folders.
+      - DIGEST_NOTE_PATTERN=${DIGEST_NOTE_PATTERN:-}
       # Local time for the digest's note name and heading. Stored timestamps
       # are timezone-aware UTC and unaffected.
       - TZ=${TZ:-Europe/London}
     ports:
       # Loopback only: reachable from this machine, not from the network.
-      - "127.0.0.1:8778:8778"
+      # The host side is NEKOCTI_PORT; inside the container it's always 8778.
+      - "127.0.0.1:${NEKOCTI_PORT:-8778}:8778"
     volumes:
       # The SQLite archive and the editable JSON configs (watchlist, tags,
       # campaigns, the password hash): everything that must survive a rebuild.
-      - ./data:/app/data
+      # A named volume, not a folder: SQLite can be corrupted by a sync client
+      # (OneDrive, Dropbox, MEGA) copying the database mid-write, and a volume
+      # is never in a synced folder. Each project folder gets its own volume.
+      # To keep the data in a host folder instead, map ./data:/app/data in a
+      # docker-compose.override.yml, outside any synced path.
+      - nekocti-data:/app/data
       # Only the daily-notes folder, never a whole notes vault -- least
       # privilege: the digest only ever needs today's note. Set
       # DIGEST_NOTES_DIR in .env to point it at yours.
@@ -44,3 +60,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+volumes:
+  nekocti-data:

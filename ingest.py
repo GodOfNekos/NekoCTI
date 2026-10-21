@@ -164,9 +164,18 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
 
     summary = {"source": name, "seen": 0, "new": 0, "high_ticket": 0, "skipped_304": False}
 
-    if getattr(parsed, "status", None) == 304:
+    status = getattr(parsed, "status", None) or 0
+    if status == 304:
         summary["skipped_304"] = True
         db.update_source_polled(conn, source_id, prior_etag, prior_modified, _now_iso())
+        return summary
+    # An HTTP error, or nothing parsed and an error to show for it, is a
+    # failed poll, not an empty feed. A feed that parses with a minor problem
+    # but still has entries is fine. The source isn't marked polled, and its
+    # etag is kept for the next try.
+    if status >= 400 or (not parsed.entries and parsed.get("bozo")):
+        exc = parsed.get("bozo_exception")
+        summary["error"] = (f"HTTP {status}" if status >= 400 else f"{type(exc).__name__}: {exc}")[:200]
         return summary
 
     watchlist, tags, campaigns = extract.load_filters()
@@ -189,9 +198,12 @@ def ingest_source(conn, name: str, feed_url: str) -> dict:
         text_for_extraction = full_text or description
 
         cve_mentions = extract.extract_cves(text_for_extraction)
-        vendor_matches = extract.match_vendors(text_for_extraction, watchlist)
-        entity_matches = extract.match_named(text_for_extraction, tags)
-        campaign_matches = extract.match_named(text_for_extraction, campaigns)
+        # The title too: a headline naming a vendor or a tracked group is
+        # the clearest statement of what the article is about.
+        text_for_matching = f"{title} {text_for_extraction}"
+        vendor_matches = extract.match_vendors(text_for_matching, watchlist)
+        entity_matches = extract.match_named(text_for_matching, tags)
+        campaign_matches = extract.match_named(text_for_matching, campaigns)
         high_ticket = extract.is_high_ticket(cve_mentions)
         breach = extract.is_breach(title, text_for_extraction)
         poc_mentioned = extract.mentions_poc(title, text_for_extraction)

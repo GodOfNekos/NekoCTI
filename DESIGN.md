@@ -225,6 +225,7 @@ Corners are close to square throughout: rows and inputs use a 2px hairline radiu
 - **Background:** transparent by default; entity cards tint with green-wash on hover, term-chip remove controls invert to green-on-black on hover.
 - **Border:** 1px solid phosphor green, always.
 - **Internal Padding:** compact (`10px 14px` cards, `4px 10px` chips).
+- **Secondary text:** an entity card's aliases and a term chip's exclusions ("NOT PHP Jabbers, ...") share one treatment, 13px at 0.7 opacity, so a term reads first and its qualifiers second.
 
 ### Inputs / Fields
 - **Style:** transparent background, 1px solid phosphor-green border, no radius, monospace text, placeholder at 0.4 opacity.
