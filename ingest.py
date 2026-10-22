@@ -54,7 +54,9 @@ SOURCES = {
     "Check Point Research": "https://research.checkpoint.com/feed",
     "Malwarebytes Labs": "https://www.malwarebytes.com/blog/feed",
     "Zero Day Initiative": "https://www.thezdi.com/blog?format=rss",
-    "Cybereason": "https://www.cybereason.com/blog/rss.xml",
+    # Cybereason's own feed until October 2026: it now redirects to LevelBlue's
+    # homepage, and its research continues on LevelBlue's SpiderLabs blog.
+    "LevelBlue SpiderLabs": "https://www.levelblue.com/blogs/spiderlabs-blog/rss.xml",
     "Tenable": "https://feeds.feedburner.com/tenable/qaXL",
     "VirusTotal Blog": "https://blog.virustotal.com/feeds/posts/default",
     "GitHub Security Lab": "https://github.blog/tag/github-security-lab/feed/",
